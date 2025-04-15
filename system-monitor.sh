@@ -13,6 +13,10 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Default Git repository URL
+DEFAULT_REPO_URL="https://github.com/hjj194/omni-status.git"
+DEFAULT_BRANCH="main"
+
 # Configuration paths
 SERVER_INSTALL_DIR="/opt/system-monitor/server"
 CLIENT_INSTALL_DIR="/opt/system-monitor/client"
@@ -23,6 +27,7 @@ CLIENT_SERVICE="system-monitor-client"
 SERVER_CONFIG="${SERVER_CONFIG_DIR}/server.conf"
 CLIENT_CONFIG="${CLIENT_CONFIG_DIR}/client.conf"
 LOG_DIR="/var/log/system-monitor"
+TEMP_DIR="/tmp/system-monitor-temp"
 
 # Function to print colored section headers
 print_header() {
@@ -72,6 +77,40 @@ identify_distro() {
     fi
 }
 
+# Function to clone the repository
+clone_repository() {
+    local repo_url=$1
+    local branch=$2
+    
+    print_message "info" "正在克隆仓库 $repo_url (分支: $branch)..."
+    
+    # Make sure the temporary directory does not exist
+    rm -rf "$TEMP_DIR"
+    mkdir -p "$TEMP_DIR"
+    
+    if ! command_exists git; then
+        print_message "warning" "Git未安装，正在安装..."
+        local distro=$(identify_distro)
+        if [ "$distro" = "debian" ]; then
+            apt-get update && apt-get install -y git
+        elif [ "$distro" = "rhel" ]; then
+            yum -y install git
+        else
+            print_message "error" "无法自动安装Git。请手动安装Git后重试。"
+            return 1
+        fi
+    fi
+    
+    # Clone the repository
+    if git clone --branch "$branch" --depth 1 "$repo_url" "$TEMP_DIR"; then
+        print_message "success" "仓库克隆成功"
+        return 0
+    else
+        print_message "error" "仓库克隆失败"
+        return 1
+    fi
+}
+
 # Function to install server
 install_server() {
     print_header
@@ -108,6 +147,35 @@ install_server() {
     mkdir -p "$SERVER_CONFIG_DIR"
     mkdir -p "$LOG_DIR"
     
+    # Ask for Git repository information or use defaults
+    local repo_url
+    local branch
+    
+    read -p "请输入Git仓库URL [$DEFAULT_REPO_URL]: " repo_url
+    repo_url=${repo_url:-$DEFAULT_REPO_URL}
+    
+    read -p "请输入分支名称 [$DEFAULT_BRANCH]: " branch
+    branch=${branch:-$DEFAULT_BRANCH}
+    
+    # Clone the repository
+    if ! clone_repository "$repo_url" "$branch"; then
+        print_message "error" "无法获取源代码，安装失败"
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    # Copy server files
+    print_message "info" "复制服务端文件..."
+    if [ -d "$TEMP_DIR/server" ]; then
+        cp -r "$TEMP_DIR/server"/* "$SERVER_INSTALL_DIR/"
+        chmod +x "$SERVER_INSTALL_DIR/server.py"
+        print_message "success" "服务端文件复制完成"
+    else
+        print_message "error" "在仓库中未找到服务端文件夹"
+        read -p "按回车键继续..."
+        return
+    fi
+    
     # Set up Python virtual environment
     print_message "info" "设置Python虚拟环境..."
     python3 -m venv "$SERVER_INSTALL_DIR/venv"
@@ -115,7 +183,11 @@ install_server() {
     
     # Install Python packages
     print_message "info" "安装Python包..."
-    pip install flask flask-sqlalchemy werkzeug
+    if [ -f "$SERVER_INSTALL_DIR/requirements.txt" ]; then
+        pip install -r "$SERVER_INSTALL_DIR/requirements.txt"
+    else
+        pip install flask flask-sqlalchemy werkzeug
+    fi
     
     # Ask for server configuration
     local port
@@ -136,23 +208,6 @@ port = $port
 secret_key = $secret_key
 debug = false
 EOF
-    
-    # Create server.py
-    print_message "info" "下载服务端代码..."
-    
-    # In a real scenario, you would download the code from a repository
-    # For now, assume server.py is in the current directory or package
-    # cp ./server/server.py "$SERVER_INSTALL_DIR/"
-    # cp -r ./server/templates "$SERVER_INSTALL_DIR/"
-    
-    # Ask for server source
-    print_message "warning" "请将server文件夹复制到 $SERVER_INSTALL_DIR"
-    read -p "服务端代码已准备好？(y/n): " ready
-    if [ "$ready" != "y" ]; then
-        print_message "error" "安装取消"
-        read -p "按回车键继续..."
-        return
-    fi
     
     # Create systemd service
     print_message "info" "创建系统服务..."
@@ -226,6 +281,40 @@ install_client() {
     mkdir -p "$CLIENT_CONFIG_DIR"
     mkdir -p "$LOG_DIR"
     
+    # Ask if to use the same repository as the server
+    local use_same_repo
+    local repo_url
+    local branch
+    
+    # Check if we have a temporary directory with repository already
+    if [ ! -d "$TEMP_DIR" ]; then
+        # Ask for Git repository information or use defaults
+        read -p "请输入Git仓库URL [$DEFAULT_REPO_URL]: " repo_url
+        repo_url=${repo_url:-$DEFAULT_REPO_URL}
+        
+        read -p "请输入分支名称 [$DEFAULT_BRANCH]: " branch
+        branch=${branch:-$DEFAULT_BRANCH}
+        
+        # Clone the repository
+        if ! clone_repository "$repo_url" "$branch"; then
+            print_message "error" "无法获取源代码，安装失败"
+            read -p "按回车键继续..."
+            return
+        fi
+    fi
+    
+    # Copy client files
+    print_message "info" "复制客户端文件..."
+    if [ -d "$TEMP_DIR/client" ]; then
+        cp -r "$TEMP_DIR/client"/* "$CLIENT_INSTALL_DIR/"
+        chmod +x "$CLIENT_INSTALL_DIR/client.py"
+        print_message "success" "客户端文件复制完成"
+    else
+        print_message "error" "在仓库中未找到客户端文件夹"
+        read -p "按回车键继续..."
+        return
+    fi
+    
     # Set up Python virtual environment
     print_message "info" "设置Python虚拟环境..."
     python3 -m venv "$CLIENT_INSTALL_DIR/venv"
@@ -233,7 +322,11 @@ install_client() {
     
     # Install Python packages
     print_message "info" "安装Python包..."
-    pip install psutil requests
+    if [ -f "$CLIENT_INSTALL_DIR/requirements.txt" ]; then
+        pip install -r "$CLIENT_INSTALL_DIR/requirements.txt"
+    else
+        pip install psutil requests
+    fi
     
     # Ask for client configuration
     local server_url
@@ -252,22 +345,6 @@ install_client() {
 url = $server_url
 report_interval = $report_interval
 EOF
-    
-    # Create client.py
-    print_message "info" "下载客户端代码..."
-    
-    # In a real scenario, you would download the code from a repository
-    # For now, assume client.py is in the current directory or package
-    # cp ./client/client.py "$CLIENT_INSTALL_DIR/"
-    
-    # Ask for client source
-    print_message "warning" "请将client文件夹复制到 $CLIENT_INSTALL_DIR"
-    read -p "客户端代码已准备好？(y/n): " ready
-    if [ "$ready" != "y" ]; then
-        print_message "error" "安装取消"
-        read -p "按回车键继续..."
-        return
-    fi
     
     # Create systemd service
     print_message "info" "创建系统服务..."
@@ -791,6 +868,12 @@ test_client() {
     read -p "按回车键继续..."
 }
 
+# Clean up function
+cleanup() {
+    print_message "info" "清理临时文件..."
+    rm -rf "$TEMP_DIR"
+}
+
 # Main menu function
 show_main_menu() {
     while true; do
@@ -831,6 +914,7 @@ show_main_menu() {
             9) test_client ;;
             10) uninstall ;;
             0) 
+                cleanup
                 print_message "info" "感谢使用系统监控管理工具！"
                 exit 0 
                 ;;
@@ -841,6 +925,9 @@ show_main_menu() {
         esac
     done
 }
+
+# Register cleanup on script exit
+trap cleanup EXIT
 
 # Check if running as root
 check_root
