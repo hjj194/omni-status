@@ -278,6 +278,7 @@ def edit_client(client_id):
     
     if request.method == 'POST':
         client.display_name = request.form.get('display_name')
+        client.ip_address = request.form.get('ip_address')
         client.physical_address = request.form.get('physical_address')
         client.notes = request.form.get('notes')
         db.session.commit()
