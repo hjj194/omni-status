@@ -111,8 +111,8 @@
                     </div>
                     <div class="card-body">
                         <div class="mb-3">
-                            <p><strong>当前登录管理员:</strong> {{ session.username }}</p>
-                            <p><strong>服务器时间:</strong> {{ now().strftime('%Y-%m-%d %H:%M:%S') }}</p>
+                            <p><strong>当前登录管理员:</strong> {{ session.get('username', '未知') }}</p>
+                            <p><strong>服务器时间:</strong> {{ current_time.strftime('%Y-%m-%d %H:%M:%S') }}</p>
                             <p><strong>监控客户端数量:</strong> {{ client_count }}</p>
                             <p><strong>系统版本:</strong> 1.0.0</p>
                         </div>
@@ -126,7 +126,7 @@
                     </div>
                     <div class="card-body">
                         <p>如需获取帮助或报告问题，请访问项目仓库：</p>
-                        <a href="https://github.com/yourusername/system-monitor" target="_blank" class="btn btn-outline-primary">
+                        <a href="https://github.com/hjj194/omni-status" target="_blank" class="btn btn-outline-primary">
                             <i class="bi bi-github me-1"></i> GitHub 项目
                         </a>
                     </div>
