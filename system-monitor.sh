@@ -21,11 +21,11 @@ REPO_BRANCH="main"
 SERVER_INSTALL_DIR="/opt/system-monitor/server"
 CLIENT_INSTALL_DIR="/opt/system-monitor/client"
 SERVER_CONFIG_DIR="/etc/system-monitor/server"
-CLIENT_CONFIG_DIR="/etc/system-monitor/client"
+# 修复: 客户端配置路径应与客户端代码预期路径一致
+CLIENT_CONFIG="/etc/system-monitor/client.conf"
 SERVER_SERVICE="system-monitor-server"
 CLIENT_SERVICE="system-monitor-client"
 SERVER_CONFIG="${SERVER_CONFIG_DIR}/server.conf"
-CLIENT_CONFIG="${CLIENT_CONFIG_DIR}/client.conf"
 LOG_DIR="/var/log/system-monitor"
 TEMP_DIR="/tmp/system-monitor-temp"
 
@@ -205,6 +205,7 @@ install_server() {
     
     # Create server configuration
     print_message "info" "创建服务器配置..."
+    mkdir -p "$(dirname "$SERVER_CONFIG")"
     cat > "$SERVER_CONFIG" << EOF
 [server]
 host = 0.0.0.0
@@ -285,7 +286,8 @@ install_client() {
     # Create directories
     print_message "info" "创建目录..."
     mkdir -p "$CLIENT_INSTALL_DIR"
-    mkdir -p "$CLIENT_CONFIG_DIR"
+    # 确保/etc/system-monitor目录存在（不再创建client子目录）
+    mkdir -p "$(dirname "$CLIENT_CONFIG")" 
     mkdir -p "$LOG_DIR"
     
     # Clone the repository if not already done
@@ -344,13 +346,22 @@ install_client() {
     read -p "请输入上报间隔(秒) [60]: " report_interval
     report_interval=${report_interval:-60}
     
-    # Create client configuration
+    # Create client configuration - 注意这里是直接在 /etc/system-monitor/client.conf 创建
     print_message "info" "创建客户端配置..."
     cat > "$CLIENT_CONFIG" << EOF
 [server]
 url = $server_url
 report_interval = $report_interval
 EOF
+    
+    # 验证配置文件已创建
+    if [ -f "$CLIENT_CONFIG" ]; then
+        print_message "success" "客户端配置文件创建成功: $CLIENT_CONFIG"
+    else
+        print_message "error" "客户端配置文件创建失败!"
+        read -p "按回车键继续..."
+        return
+    fi
     
     # Create systemd service
     print_message "info" "创建系统服务..."
@@ -801,7 +812,8 @@ uninstall() {
                 fi
                 
                 rm -rf "$CLIENT_INSTALL_DIR"
-                rm -rf "$CLIENT_CONFIG_DIR"
+                # 删除客户端配置文件 (直接配置文件而非目录)
+                rm -f "$CLIENT_CONFIG"
                 
                 print_message "success" "客户端已卸载"
             else
@@ -831,7 +843,7 @@ uninstall() {
                 rm -rf "$SERVER_INSTALL_DIR"
                 rm -rf "$CLIENT_INSTALL_DIR"
                 rm -rf "$SERVER_CONFIG_DIR"
-                rm -rf "$CLIENT_CONFIG_DIR"
+                rm -f "$CLIENT_CONFIG"
                 
                 read -p "是否删除日志文件？(y/n): " delete_logs
                 if [ "$delete_logs" = "y" ]; then
@@ -863,6 +875,16 @@ test_client() {
         print_message "error" "客户端未安装"
         read -p "按回车键继续..."
         return
+    fi
+    
+    # 显示当前配置
+    if [ -f "$CLIENT_CONFIG" ]; then
+        print_message "info" "当前客户端配置:"
+        cat "$CLIENT_CONFIG"
+        echo ""
+    else
+        print_message "warning" "未找到客户端配置文件: $CLIENT_CONFIG"
+        print_message "info" "将使用默认配置"
     fi
     
     # Run client with test flag
