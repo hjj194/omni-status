@@ -13,9 +13,9 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Default Git repository URL
-DEFAULT_REPO_URL="https://github.com/hjj194/omni-status.git"
-DEFAULT_BRANCH="main"
+# 固定的 Git 仓库信息
+REPO_URL="https://github.com/hjj194/omni-status.git"
+REPO_BRANCH="main"
 
 # Configuration paths
 SERVER_INSTALL_DIR="/opt/system-monitor/server"
@@ -77,12 +77,28 @@ identify_distro() {
     fi
 }
 
+# Get the server's IP address
+get_server_ip() {
+    # 尝试获取主机IP（非127.0.0.1）
+    local ip=$(hostname -I | awk '{print $1}')
+    if [ -z "$ip" ]; then
+        # 如果hostname -I失败，尝试使用ip命令
+        if command_exists ip; then
+            ip=$(ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+        fi
+    fi
+    
+    # 如果仍无法获取，使用localhost
+    if [ -z "$ip" ]; then
+        ip="localhost"
+    fi
+    
+    echo "$ip"
+}
+
 # Function to clone the repository
 clone_repository() {
-    local repo_url=$1
-    local branch=$2
-    
-    print_message "info" "正在克隆仓库 $repo_url (分支: $branch)..."
+    print_message "info" "正在克隆仓库 $REPO_URL (分支: $REPO_BRANCH)..."
     
     # Make sure the temporary directory does not exist
     rm -rf "$TEMP_DIR"
@@ -102,7 +118,7 @@ clone_repository() {
     fi
     
     # Clone the repository
-    if git clone --branch "$branch" --depth 1 "$repo_url" "$TEMP_DIR"; then
+    if git clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$TEMP_DIR"; then
         print_message "success" "仓库克隆成功"
         return 0
     else
@@ -147,18 +163,8 @@ install_server() {
     mkdir -p "$SERVER_CONFIG_DIR"
     mkdir -p "$LOG_DIR"
     
-    # Ask for Git repository information or use defaults
-    local repo_url
-    local branch
-    
-    read -p "请输入Git仓库URL [$DEFAULT_REPO_URL]: " repo_url
-    repo_url=${repo_url:-$DEFAULT_REPO_URL}
-    
-    read -p "请输入分支名称 [$DEFAULT_BRANCH]: " branch
-    branch=${branch:-$DEFAULT_BRANCH}
-    
     # Clone the repository
-    if ! clone_repository "$repo_url" "$branch"; then
+    if ! clone_repository; then
         print_message "error" "无法获取源代码，安装失败"
         read -p "按回车键继续..."
         return
@@ -189,15 +195,13 @@ install_server() {
         pip install flask flask-sqlalchemy werkzeug
     fi
     
-    # Ask for server configuration
+    # Ask for server port
     local port
-    local secret_key
-    
     read -p "请输入服务器端口 [5000]: " port
     port=${port:-5000}
     
     # Generate random secret key
-    secret_key=$(openssl rand -hex 16)
+    local secret_key=$(openssl rand -hex 16)
     
     # Create server configuration
     print_message "info" "创建服务器配置..."
@@ -237,8 +241,11 @@ EOF
     systemctl enable "$SERVER_SERVICE"
     systemctl start "$SERVER_SERVICE"
     
+    # Get server IP for display
+    local server_ip=$(get_server_ip)
+    
     print_message "success" "服务端安装完成!"
-    print_message "info" "服务器地址: http://localhost:$port"
+    print_message "info" "服务器地址: http://$server_ip:$port"
     print_message "info" "默认管理员账户: admin / admin"
     print_message "warning" "请尽快登录并修改默认密码!"
     
@@ -281,22 +288,9 @@ install_client() {
     mkdir -p "$CLIENT_CONFIG_DIR"
     mkdir -p "$LOG_DIR"
     
-    # Ask if to use the same repository as the server
-    local use_same_repo
-    local repo_url
-    local branch
-    
-    # Check if we have a temporary directory with repository already
+    # Clone the repository if not already done
     if [ ! -d "$TEMP_DIR" ]; then
-        # Ask for Git repository information or use defaults
-        read -p "请输入Git仓库URL [$DEFAULT_REPO_URL]: " repo_url
-        repo_url=${repo_url:-$DEFAULT_REPO_URL}
-        
-        read -p "请输入分支名称 [$DEFAULT_BRANCH]: " branch
-        branch=${branch:-$DEFAULT_BRANCH}
-        
-        # Clone the repository
-        if ! clone_repository "$repo_url" "$branch"; then
+        if ! clone_repository; then
             print_message "error" "无法获取源代码，安装失败"
             read -p "按回车键继续..."
             return
@@ -328,13 +322,25 @@ install_client() {
         pip install psutil requests
     fi
     
-    # Ask for client configuration
-    local server_url
+    # Ask for server information
+    local server_host
+    local server_port
+    
+    read -p "请输入服务器IP或域名: " server_host
+    if [ -z "$server_host" ]; then
+        print_message "error" "服务器地址不能为空"
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    read -p "请输入服务器端口 [5000]: " server_port
+    server_port=${server_port:-5000}
+    
+    # Construct server URL
+    local server_url="http://${server_host}:${server_port}/report"
+    
+    # Ask for report interval
     local report_interval
-    
-    read -p "请输入服务器URL [http://localhost:5000/report]: " server_url
-    server_url=${server_url:-"http://localhost:5000/report"}
-    
     read -p "请输入上报间隔(秒) [60]: " report_interval
     report_interval=${report_interval:-60}
     
