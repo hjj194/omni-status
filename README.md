@@ -181,7 +181,7 @@ system-monitor/
 1. **下载管理脚本**
 
    ```bash
-   curl -O https://raw.githubusercontent.com/yourusername/system-monitor/main/system-monitor.sh
+   curl -O https://raw.githubusercontent.com/hjj194/omni-status/main/system-monitor.sh
    chmod +x system-monitor.sh
    ```
 
