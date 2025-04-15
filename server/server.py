@@ -383,7 +383,13 @@ def settings():
         
         return redirect(url_for('settings'))
     
-    return render_template('settings.html')
+    # 获取客户端数量
+    client_count = Client.query.count()
+    
+    # 获取当前时间
+    current_time = datetime.now()
+    
+    return render_template('settings.html', client_count=client_count, current_time=current_time)
 
 if __name__ == '__main__':
     with app.app_context():
