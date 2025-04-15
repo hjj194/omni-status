@@ -67,8 +67,8 @@
                                 
                                 <div class="mb-3">
                                     <label for="ip_address" class="form-label">IP地址</label>
-                                    <input type="text" class="form-control" id="ip_address" value="{{ client.ip_address }}" disabled>
-                                    <div class="form-text">IP地址由客户端上报，不可编辑</div>
+                                    <input type="text" class="form-control" id="ip_address" name="ip_address" value="{{ client.ip_address }}">
+                                    <div class="form-text">客户端的IP地址</div>
                                 </div>
                                 
                                 <div class="mb-3">
