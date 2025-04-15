@@ -46,7 +46,7 @@
 
 1. 下载部署脚本
 ```bash
-curl -O https://raw.githubusercontent.com/yourusername/omni-status/main/deploy.sh
+curl -O https://raw.githubusercontent.com/hjj194/omni-status/main/deploy.sh
 chmod +x deploy.sh
 ```
 
@@ -70,7 +70,7 @@ sudo ./deploy.sh
 
 1. 在需要监控的机器上下载部署脚本
 ```bash
-curl -O https://raw.githubusercontent.com/yourusername/omni-status/main/deploy.sh
+curl -O https://raw.githubusercontent.com/hjj194/omni-status/main/deploy.sh
 chmod +x deploy.sh
 ```
 
