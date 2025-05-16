@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}系统状态{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="mb-4">系统状态</h2>
+    
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">系统概览</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3 text-center">
+                            <div class="h4">{{ client_count }}</div>
+                            <div>已注册客户端</div>
+                        </div>
+                        <div class="col-md-3 text-center">
+                            <div class="h4">{{ metrics_count }}</div>
+                            <div>监控数据点</div>
+                        </div>
+                        <div class="col-md-3 text-center">
+                            <div class="h4">{{ db_size|round(2) if db_size else '未知' }} MB</div>
+                            <div>数据库大小</div>
+                        </div>
+                        <div class="col-md-3 text-center">
+                            <div class="h4">{{ (metrics_count / client_count)|round(1) if client_count else 0 }}</div>
+                            <div>平均每客户端数据点</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">客户端状态</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>客户端名称</th>
+                                    <th>主机名</th>
+                                    <th>数据点数量</th>
+                                    <th>最后活动时间</th>
+                                    <th>状态</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for client in client_stats %}
+                                <tr>
+                                    <td>{{ client.display_name }}</td>
+                                    <td>{{ client.hostname }}</td>
+                                    <td>{{ client.data_points }}</td>
+                                    <td>{{ client.last_seen.strftime('%Y-%m-%d %H:%M:%S') if client.last_seen else '未知' }}</td>
+                                    <td>
+                                        {% if client.last_seen and (now() - client.last_seen).total_seconds() < 600 %}
+                                            <span class="badge bg-success">在线</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">离线</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <a href="{{ url_for('client_history', client_id=client.id) }}" class="btn btn-sm btn-info">查看历史</a>
+                                        <form action="{{ url_for('purge_data') }}" method="post" style="display:inline;" onsubmit="return confirm('确定要清除此客户端的所有数据吗？此操作不可恢复。');">
+                                            <input type="hidden" name="purge_type" value="specific_client">
+                                            <input type="hidden" name="client_id" value="{{ client.id }}">
+                                            <button type="submit" class="btn btn-sm btn-danger">清除数据</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row mt-4">
+        <div class="col-md-12 text-center">
+            <a href="{{ url_for('settings') }}" class="btn btn-primary">返回系统设置</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
