@@ -8,6 +8,8 @@ import functools
 import json
 import os
 import logging
+import configparser
+import sqlite3
 
 # 配置日志
 logging.basicConfig(
@@ -17,11 +19,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger('system_monitor_server')
 
+# 获取配置
+def load_config():
+    config = configparser.ConfigParser()
+    config_file = '/etc/system-monitor/server/server.conf'
+    
+    # 默认配置
+    default_config = {
+        'host': '0.0.0.0',
+        'port': 5000,
+        'secret_key': os.environ.get('SECRET_KEY', 'dev_key_change_in_production'),
+        'debug': False
+    }
+    
+    if os.path.exists(config_file):
+        try:
+            config.read(config_file)
+            server_config = config['server'] if 'server' in config else {}
+            # 合并配置
+            for key in default_config:
+                if key not in server_config:
+                    server_config[key] = default_config[key]
+            
+            return {
+                'host': server_config.get('host'),
+                'port': int(server_config.get('port')),
+                'secret_key': server_config.get('secret_key'),
+                'debug': server_config.getboolean('debug')
+            }
+        except Exception as e:
+            logger.error(f"加载配置文件失败: {e}")
+    
+    logger.warning("使用默认配置")
+    return default_config
+
+# 加载配置
+config = load_config()
+
 # 配置Flask应用
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///monitor.db'  # 使用SQLite简化部署
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_key_change_in_production')  # 用于session
+app.config['SECRET_KEY'] = config['secret_key']  # 用于session
 db = SQLAlchemy(app)
 
 # 数据模型
@@ -139,7 +178,7 @@ def report():
 @app.route('/')
 def dashboard():
     """主仪表盘页面"""
-    clients = Client.query.all()
+    clients = Client.query.order_by(Client.display_order).all()
     client_data = []
     
     for client in clients:
@@ -222,7 +261,7 @@ def reorder_clients():
         return redirect(url_for('dashboard'))
     
     # 获取所有客户端
-    clients = Client.query.all()
+    clients = Client.query.order_by(Client.display_order).all()
     client_data = []
     
     for client in clients:
@@ -358,6 +397,131 @@ def client_history(client_id):
         is_admin=session.get('logged_in', False)
     )
 
+@app.route('/purge_data', methods=['POST'])
+@login_required
+def purge_data():
+    """清除系统数据"""
+    purge_type = request.form.get('purge_type')
+    client_id = request.form.get('client_id')
+    retention_days = request.form.get('retention_days')
+    
+    if purge_type == 'specific_client' and client_id:
+        # 清除特定客户端的所有指标数据
+        metrics_count = Metrics.query.filter_by(client_id=client_id).count()
+        Metrics.query.filter_by(client_id=client_id).delete()
+        db.session.commit()
+        
+        client = Client.query.get(client_id)
+        client_name = client.display_name or client.hostname if client else "未知客户端"
+        
+        flash(f'已清除客户端"{client_name}"的所有监控数据，共{metrics_count}条记录', 'success')
+        logger.info(f"Purged all metrics data for client {client_name} (ID: {client_id}), {metrics_count} records removed")
+        
+    elif purge_type == 'all_metrics':
+        # 清除所有客户端的指标数据，但保留客户端信息
+        metrics_count = Metrics.query.count()
+        Metrics.query.delete()
+        db.session.commit()
+        flash(f'已清除所有监控数据，共{metrics_count}条记录', 'warning')
+        logger.warning(f"Admin {session['username']} purged ALL metrics data, {metrics_count} records removed")
+        
+    elif purge_type == 'set_retention' and retention_days:
+        # 根据设定的保留天数清除数据
+        try:
+            days = int(retention_days)
+            if days < 1:
+                flash('保留天数必须大于等于1', 'danger')
+                return redirect(url_for('settings'))
+                
+            cutoff_date = datetime.now() - timedelta(days=days)
+            count_before = Metrics.query.count()
+            Metrics.query.filter(Metrics.timestamp < cutoff_date).delete()
+            count_after = Metrics.query.count()
+            deleted_count = count_before - count_after
+            
+            db.session.commit()
+            flash(f'已清除{days}天之前的所有数据，共删除{deleted_count}条记录', 'success')
+            logger.info(f"Purged metrics older than {days} days, {deleted_count} records removed")
+        except ValueError:
+            flash('请输入有效的天数', 'danger')
+    
+    return redirect(url_for('settings'))
+
+@app.route('/optimize_database', methods=['POST'])
+@login_required
+def optimize_database():
+    """优化SQLite数据库"""
+    try:
+        # 获取数据库文件路径
+        db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        
+        # 确保数据库路径有效
+        if not os.path.exists(db_path):
+            flash('数据库文件不存在', 'danger')
+            return redirect(url_for('settings'))
+        
+        # 获取优化前的大小
+        size_before = os.path.getsize(db_path) / (1024 * 1024)  # MB
+        
+        # 连接数据库并执行VACUUM
+        conn = sqlite3.connect(db_path)
+        conn.execute('VACUUM')
+        conn.close()
+        
+        # 获取优化后的大小
+        size_after = os.path.getsize(db_path) / (1024 * 1024)  # MB
+        saved = size_before - size_after
+        
+        flash(f'数据库优化完成。优化前: {size_before:.2f} MB, 优化后: {size_after:.2f} MB, 节省: {saved:.2f} MB', 'success')
+        logger.info(f"Database optimized by admin {session['username']}, saved {saved:.2f} MB")
+    except Exception as e:
+        flash(f'数据库优化失败: {str(e)}', 'danger')
+        logger.error(f"Database optimization failed: {str(e)}")
+    
+    return redirect(url_for('settings'))
+
+@app.route('/system_status')
+@login_required
+def system_status():
+    """系统状态信息"""
+    # 获取数据库统计信息
+    metrics_count = Metrics.query.count()
+    client_count = Client.query.count()
+    
+    # 计算每个客户端的数据点数量
+    client_data_counts = db.session.query(
+        Metrics.client_id, 
+        db.func.count(Metrics.id).label('count')
+    ).group_by(Metrics.client_id).all()
+    
+    # 获取客户端信息
+    client_stats = []
+    for client_id, count in client_data_counts:
+        client = Client.query.get(client_id)
+        if client:
+            client_stats.append({
+                'id': client.id,
+                'hostname': client.hostname,
+                'display_name': client.display_name or client.hostname,
+                'data_points': count,
+                'last_seen': client.last_seen
+            })
+    
+    # 估算数据库大小（如果使用SQLite）
+    db_size = None
+    if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        try:
+            db_size = os.path.getsize(db_path) / (1024 * 1024)  # MB
+        except:
+            pass
+    
+    return render_template('system_status.html', 
+                          metrics_count=metrics_count,
+                          client_count=client_count,
+                          client_stats=client_stats,
+                          db_size=db_size)
+
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
@@ -389,9 +553,30 @@ def settings():
     # 获取当前时间
     current_time = datetime.now()
     
-    return render_template('settings.html', client_count=client_count, current_time=current_time)
+    # 获取数据库大小和指标数量
+    db_size = None
+    if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        try:
+            db_size = os.path.getsize(db_path) / (1024 * 1024)  # MB
+        except:
+            pass
+    
+    metrics_count = Metrics.query.count()
+    
+    # 获取所有客户端供数据清除选择
+    clients = Client.query.all()
+    
+    return render_template('settings.html', 
+                          client_count=client_count, 
+                          current_time=current_time,
+                          clients=clients,
+                          db_size=db_size,
+                          metrics_count=metrics_count)
 
 if __name__ == '__main__':
     with app.app_context():
         init_db()  # 初始化数据库和创建管理员
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    
+    # 使用配置文件中的主机和端口
+    app.run(host=config['host'], port=config['port'], debug=config['debug'])
