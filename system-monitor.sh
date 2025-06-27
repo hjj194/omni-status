@@ -192,7 +192,7 @@ install_server() {
     if [ -f "$SERVER_INSTALL_DIR/requirements.txt" ]; then
         pip install -r "$SERVER_INSTALL_DIR/requirements.txt"
     else
-        pip install flask flask-sqlalchemy werkzeug
+        pip install flask==2.2.3 flask-sqlalchemy==3.0.3 werkzeug==2.2.3 sqlalchemy==2.0.4
     fi
     
     # Ask for server port
@@ -236,6 +236,13 @@ Environment="SECRET_KEY=$secret_key"
 WantedBy=multi-user.target
 EOF
     
+    # Set up database directory and permissions
+    print_message "info" "设置数据库目录和权限..."
+    mkdir -p "$SERVER_INSTALL_DIR/data"
+    chown -R root:root "$SERVER_INSTALL_DIR"
+    chmod -R 755 "$SERVER_INSTALL_DIR"
+    chmod -R 755 "$LOG_DIR"
+    
     # Enable and start service
     print_message "info" "启用并启动服务..."
     systemctl daemon-reload
@@ -249,6 +256,12 @@ EOF
     print_message "info" "服务器地址: http://$server_ip:$port"
     print_message "info" "默认管理员账户: admin / admin"
     print_message "warning" "请尽快登录并修改默认密码!"
+    echo ""
+    print_message "info" "新功能说明:"
+    print_message "info" "• 实时监控（无历史记录存储，节省存储空间）"
+    print_message "info" "• 资源状态颜色指示（绿-充裕，黄-中度，红-紧张）"
+    print_message "info" "• 公告管理功能（管理员可发布系统公告）"
+    print_message "info" "• 配置备份功能（客户端配置可导入导出）"
     
     read -p "按回车键继续..."
 }
