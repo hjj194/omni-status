@@ -460,6 +460,18 @@ def import_config():
         flash('导入配置失败', 'danger')
     return redirect(url_for('settings'))
 
+@app.route('/clear_cache', methods=['POST'])
+@login_required
+def clear_cache():
+    """清除实时数据缓存"""
+    global client_realtime_data
+    cache_count = len(client_realtime_data)
+    client_realtime_data.clear()
+    
+    flash(f'已清除 {cache_count} 个客户端的实时数据缓存', 'success')
+    logger.info(f"Admin {session['username']} cleared realtime data cache, {cache_count} clients affected")
+    return redirect(url_for('settings'))
+
 @app.route('/announcements', methods=['GET', 'POST'])
 @login_required
 def manage_announcements():
