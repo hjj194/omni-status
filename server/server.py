@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.dialects.postgresql import JSON
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import functools
@@ -9,15 +8,26 @@ import json
 import os
 import logging
 import configparser
-import sqlite3
 
 # 配置日志
+# 确保日志目录存在，如果无法创建系统日志目录则回退到本地目录
+try:
+    log_dir = '/var/log/system-monitor'
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, 'server.log')
+except (PermissionError, OSError):
+    # 如果无法创建系统日志目录，使用当前目录
+    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='/var/log/system-monitor/server.log'
+    filename=log_file
 )
 logger = logging.getLogger('system_monitor_server')
+
+# 配置文件路径（使用绝对路径）
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server_config.json')
 
 # 获取配置
 def load_config():
@@ -53,12 +63,83 @@ def load_config():
     logger.warning("使用默认配置")
     return default_config
 
+# 保存客户端配置到文件
+def save_client_configs():
+    """将客户端配置信息保存到文件"""
+    try:
+        clients = Client.query.all()
+        client_configs = []
+        
+        for client in clients:
+            client_configs.append({
+                'id': client.id,
+                'hostname': client.hostname,
+                'ip_address': client.ip_address,
+                'physical_address': client.physical_address,
+                'display_name': client.display_name,
+                'notes': client.notes,
+                'platform': client.platform,
+                'display_order': client.display_order
+            })
+        
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(client_configs, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"客户端配置已保存到 {CONFIG_FILE}")
+        return True
+    except Exception as e:
+        logger.error(f"保存客户端配置失败: {e}")
+        return False
+
+# 从文件加载客户端配置
+def load_client_configs():
+    """从文件加载客户端配置信息"""
+    try:
+        if not os.path.exists(CONFIG_FILE):
+            logger.info("配置文件不存在，跳过加载")
+            return False
+        
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            client_configs = json.load(f)
+        
+        for config in client_configs:
+            existing_client = Client.query.get(config['id'])
+            if existing_client:
+                # 更新现有客户端的配置信息（仅更新管理员设置的字段）
+                existing_client.physical_address = config.get('physical_address')
+                existing_client.display_name = config.get('display_name')
+                existing_client.notes = config.get('notes')
+                existing_client.display_order = config.get('display_order', 0)
+            else:
+                # 创建新的客户端记录（从备份恢复）
+                new_client = Client(
+                    id=config['id'],
+                    hostname=config['hostname'],
+                    ip_address=config['ip_address'],
+                    physical_address=config.get('physical_address'),
+                    display_name=config.get('display_name'),
+                    notes=config.get('notes'),
+                    platform=config.get('platform'),
+                    display_order=config.get('display_order', 0),
+                    last_seen=None  # 这个会在客户端下次连接时更新
+                )
+                db.session.add(new_client)
+        
+        db.session.commit()
+        logger.info(f"从 {CONFIG_FILE} 加载了 {len(client_configs)} 个客户端配置")
+        return True
+    except Exception as e:
+        logger.error(f"加载客户端配置失败: {e}")
+        return False
+
 # 加载配置
 config = load_config()
 
 # 配置Flask应用
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///monitor.db'  # 使用SQLite简化部署
+# 使用绝对路径存储数据库
+db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = config['secret_key']  # 用于session
 db = SQLAlchemy(app)
@@ -86,17 +167,17 @@ class Client(db.Model):
     last_seen = db.Column(db.DateTime)  # 最后一次上报时间
     display_order = db.Column(db.Integer, default=0)  # 显示顺序
 
-class Metrics(db.Model):
+class Announcement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    client_id = db.Column(db.String(36), db.ForeignKey('client.id'))
-    timestamp = db.Column(db.DateTime, index=True)
-    cpu_data = db.Column(JSON)  # CPU数据
-    memory_data = db.Column(JSON)  # 内存数据
-    disk_data = db.Column(JSON)  # 磁盘数据
-    gpu_data = db.Column(JSON)  # GPU数据
-    uptime_seconds = db.Column(db.Float)  # 运行时间(秒)
+    title = db.Column(db.String(200), nullable=False)  # 公告标题
+    content = db.Column(db.Text, nullable=False)  # 公告内容
+    created_at = db.Column(db.DateTime, default=datetime.now)  # 创建时间
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)  # 更新时间
+    is_active = db.Column(db.Boolean, default=True)  # 是否启用
+    priority = db.Column(db.Integer, default=0)  # 优先级，数值越大越靠前
 
-    client = db.relationship('Client', backref=db.backref('metrics', lazy='dynamic'))
+# 实时数据存储（不持久化到数据库）
+client_realtime_data = {}
 
 # 创建数据库和初始管理员
 def init_db():
@@ -116,6 +197,9 @@ def init_db():
         db.session.add(admin)
         db.session.commit()
         logger.info("Created default admin user")
+    
+    # 从配置文件加载客户端配置
+    load_client_configs()
 
 # 装饰器：需要登录
 def login_required(f):
@@ -154,25 +238,22 @@ def report():
     client.platform = data['platform']
     client.last_seen = datetime.now()
     
-    # 创建新的指标记录
-    metrics = Metrics(
-        client_id=data['client_id'],
-        timestamp=datetime.fromisoformat(data['timestamp']),
-        cpu_data=data['cpu'],
-        memory_data=data['memory'],
-        disk_data=data['disks'],
-        gpu_data=data['gpu'],
-        uptime_seconds=data['uptime_seconds']
-    )
-    db.session.add(metrics)
-    
-    # 清理旧数据 (保留30天)
-    old_data_cutoff = datetime.now() - timedelta(days=30)
-    old_metrics = Metrics.query.filter(Metrics.timestamp < old_data_cutoff).all()
-    for old_metric in old_metrics:
-        db.session.delete(old_metric)
+    # 存储实时数据（不持久化）
+    client_realtime_data[data['client_id']] = {
+        'timestamp': datetime.fromisoformat(data['timestamp']),
+        'cpu': data['cpu'],
+        'memory': data['memory'],
+        'disks': data['disks'],
+        'gpu': data['gpu'],
+        'uptime_seconds': data['uptime_seconds']
+    }
     
     db.session.commit()
+    
+    # 保存配置到文件（当有新客户端时自动保存）
+    if client.id not in [c.id for c in Client.query.all()[:-1]]:
+        save_client_configs()
+    
     return jsonify({"status": "success"})
 
 @app.route('/')
@@ -182,19 +263,19 @@ def dashboard():
     client_data = []
     
     for client in clients:
-        # 获取最新的指标数据
-        latest_metrics = client.metrics.order_by(Metrics.timestamp.desc()).first()
+        # 获取实时数据
+        realtime_data = client_realtime_data.get(client.id)
         
-        if latest_metrics:
+        if realtime_data:
             # 计算正常运行时间的格式化字符串
-            uptime = timedelta(seconds=latest_metrics.uptime_seconds)
+            uptime = timedelta(seconds=realtime_data['uptime_seconds'])
             days = uptime.days
             hours, remainder = divmod(uptime.seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
             uptime_str = f"{days}天 {hours}小时 {minutes}分钟"
             
             # 检查是否最近报告过 (10分钟内)
-            is_online = (datetime.now() - client.last_seen).total_seconds() < 600
+            is_online = (datetime.now() - client.last_seen).total_seconds() < 600 if client.last_seen else False
             
             # 只保留根目录的磁盘信息
             filtered_disks = []
@@ -207,7 +288,7 @@ def dashboard():
             }
             root_disk = None
             
-            for disk in latest_metrics.disk_data:
+            for disk in realtime_data['disks']:
                 if disk['mountpoint'] == '/':
                     root_disk = disk
                 total_disk_info['total'] += disk['total']
@@ -232,15 +313,37 @@ def dashboard():
                 'platform': client.platform,
                 'last_seen': client.last_seen,
                 'is_online': is_online,
-                'cpu': latest_metrics.cpu_data,
-                'memory': latest_metrics.memory_data,
+                'cpu': realtime_data['cpu'],
+                'memory': realtime_data['memory'],
                 'disks': filtered_disks,
-                'gpu': latest_metrics.gpu_data,
+                'gpu': realtime_data['gpu'],
                 'uptime': uptime_str,
                 'display_order': client.display_order
             })
+        else:
+            # 没有实时数据的客户端，显示为离线
+            client_data.append({
+                'id': client.id,
+                'hostname': client.hostname,
+                'display_name': client.display_name or client.hostname,
+                'ip_address': client.ip_address,
+                'physical_address': client.physical_address or '未设置',
+                'notes': client.notes,
+                'platform': client.platform,
+                'last_seen': client.last_seen,
+                'is_online': False,
+                'cpu': {'usage_percent': 0},
+                'memory': {'percent': 0, 'used': 0, 'total': 0},
+                'disks': [],
+                'gpu': [],
+                'uptime': '未知',
+                'display_order': client.display_order
+            })
     
-    return render_template('dashboard.html', clients=client_data, is_admin=session.get('logged_in', False))
+    # 获取公告
+    announcements = Announcement.query.filter_by(is_active=True).order_by(Announcement.priority.desc(), Announcement.created_at.desc()).all()
+    
+    return render_template('dashboard.html', clients=client_data, is_admin=session.get('logged_in', False), announcements=announcements)
 
 @app.route('/reorder', methods=['GET', 'POST'])
 @login_required
@@ -257,6 +360,10 @@ def reorder_clients():
                 client.display_order = i
         
         db.session.commit()
+        
+        # 保存配置到文件
+        save_client_configs()
+        
         flash('客户端显示顺序已更新', 'success')
         return redirect(url_for('dashboard'))
     
@@ -321,206 +428,104 @@ def edit_client(client_id):
         client.physical_address = request.form.get('physical_address')
         client.notes = request.form.get('notes')
         db.session.commit()
+        
+        # 保存配置到文件
+        save_client_configs()
+        
         logger.info(f"Client information updated: {client.hostname} (ID: {client.id})")
         flash('客户端信息已更新', 'success')
         return redirect(url_for('dashboard'))
     
     return render_template('edit_client.html', client=client)
 
-@app.route('/client/<client_id>/history')
-def client_history(client_id):
-    """查看客户端历史数据页面"""
-    client = Client.query.get_or_404(client_id)
-    period = request.args.get('period', 'week')  # 默认显示一周
-    
-    # 根据时间段过滤数据
-    if period == 'week':
-        cutoff = datetime.now() - timedelta(days=7)
-    elif period == 'month':
-        cutoff = datetime.now() - timedelta(days=30)
-    elif period == 'halfyear':
-        cutoff = datetime.now() - timedelta(days=182)
-    elif period == 'year':
-        cutoff = datetime.now() - timedelta(days=365)
+# 历史记录功能已移除 - 只保留实时监控
+
+@app.route('/export_config', methods=['POST'])
+@login_required
+def export_config():
+    """导出客户端配置"""
+    if save_client_configs():
+        flash(f'客户端配置已导出到 {CONFIG_FILE}', 'success')
     else:
-        cutoff = datetime.now() - timedelta(days=7)  # 默认一周
-    
-    metrics = client.metrics.filter(Metrics.timestamp >= cutoff).order_by(Metrics.timestamp).all()
-    
-    # 准备图表数据
-    timestamps = [m.timestamp.strftime('%Y-%m-%d %H:%M') for m in metrics]
-    cpu_data = [m.cpu_data['usage_percent'] for m in metrics]
-    memory_data = [m.memory_data['percent'] for m in metrics]
-    
-    # GPU数据可能不存在
-    gpu_data = []
-    for m in metrics:
-        if m.gpu_data and len(m.gpu_data) > 0:
-            gpu_data.append([gpu['utilization'] for gpu in m.gpu_data])
-        else:
-            gpu_data.append([])
-    
-    # 只提取根目录和总存储的磁盘数据
-    disk_data = {}
-    if metrics and metrics[0].disk_data:
-        for m in metrics:
-            # 找出根目录
-            root_disk = next((d for d in m.disk_data if d['mountpoint'] == '/'), None)
-            if root_disk:
-                if '/' not in disk_data:
-                    disk_data['/'] = []
-                disk_data['/'].append(root_disk['percent'])
-        
-            # 计算总存储
-            total_used = sum(d['used'] for d in m.disk_data)
-            total_space = sum(d['total'] for d in m.disk_data)
-            if total_space > 0:
-                total_percent = (total_used / total_space) * 100
-                if 'Total' not in disk_data:
-                    disk_data['Total'] = []
-                disk_data['Total'].append(total_percent)
-    
-    # 转换为JSON格式
-    disk_data_json = {}
-    for key, values in disk_data.items():
-        disk_data_json[key] = values
-    
-    return render_template(
-        'client_history.html',
-        client=client,
-        period=period,
-        timestamps=json.dumps(timestamps),
-        cpu_data=json.dumps(cpu_data),
-        memory_data=json.dumps(memory_data),
-        gpu_data=json.dumps(gpu_data),
-        disk_data=json.dumps(disk_data_json),
-        is_admin=session.get('logged_in', False)
-    )
+        flash('导出配置失败', 'danger')
+    return redirect(url_for('settings'))
 
-@app.route('/purge_data', methods=['POST'])
+@app.route('/import_config', methods=['POST'])
 @login_required
-def purge_data():
-    """清除系统数据"""
-    purge_type = request.form.get('purge_type')
-    client_id = request.form.get('client_id')
-    retention_days = request.form.get('retention_days')
-    
-    if purge_type == 'specific_client' and client_id:
-        # 清除特定客户端的所有指标数据
-        metrics_count = Metrics.query.filter_by(client_id=client_id).count()
-        Metrics.query.filter_by(client_id=client_id).delete()
-        db.session.commit()
+def import_config():
+    """导入客户端配置"""
+    if load_client_configs():
+        flash('客户端配置已成功导入', 'success')
+    else:
+        flash('导入配置失败', 'danger')
+    return redirect(url_for('settings'))
+
+@app.route('/announcements', methods=['GET', 'POST'])
+@login_required
+def manage_announcements():
+    """公告管理页面"""
+    if request.method == 'POST':
+        action = request.form.get('action')
         
-        client = Client.query.get(client_id)
-        client_name = client.display_name or client.hostname if client else "未知客户端"
-        
-        flash(f'已清除客户端"{client_name}"的所有监控数据，共{metrics_count}条记录', 'success')
-        logger.info(f"Purged all metrics data for client {client_name} (ID: {client_id}), {metrics_count} records removed")
-        
-    elif purge_type == 'all_metrics':
-        # 清除所有客户端的指标数据，但保留客户端信息
-        metrics_count = Metrics.query.count()
-        Metrics.query.delete()
-        db.session.commit()
-        flash(f'已清除所有监控数据，共{metrics_count}条记录', 'warning')
-        logger.warning(f"Admin {session['username']} purged ALL metrics data, {metrics_count} records removed")
-        
-    elif purge_type == 'set_retention' and retention_days:
-        # 根据设定的保留天数清除数据
-        try:
-            days = int(retention_days)
-            if days < 1:
-                flash('保留天数必须大于等于1', 'danger')
-                return redirect(url_for('settings'))
-                
-            cutoff_date = datetime.now() - timedelta(days=days)
-            count_before = Metrics.query.count()
-            Metrics.query.filter(Metrics.timestamp < cutoff_date).delete()
-            count_after = Metrics.query.count()
-            deleted_count = count_before - count_after
+        if action == 'add':
+            # 添加新公告
+            title = request.form.get('title')
+            content = request.form.get('content')
+            priority = int(request.form.get('priority', 0))
             
-            db.session.commit()
-            flash(f'已清除{days}天之前的所有数据，共删除{deleted_count}条记录', 'success')
-            logger.info(f"Purged metrics older than {days} days, {deleted_count} records removed")
-        except ValueError:
-            flash('请输入有效的天数', 'danger')
+            if title and content:
+                announcement = Announcement(
+                    title=title,
+                    content=content,
+                    priority=priority
+                )
+                db.session.add(announcement)
+                db.session.commit()
+                flash('公告已添加', 'success')
+            else:
+                flash('标题和内容不能为空', 'danger')
+                
+        elif action == 'toggle':
+            # 切换公告状态
+            announcement_id = request.form.get('announcement_id')
+            announcement = Announcement.query.get(announcement_id)
+            if announcement:
+                announcement.is_active = not announcement.is_active
+                db.session.commit()
+                flash(f'公告已{"启用" if announcement.is_active else "禁用"}', 'success')
+                
+        elif action == 'delete':
+            # 删除公告
+            announcement_id = request.form.get('announcement_id')
+            announcement = Announcement.query.get(announcement_id)
+            if announcement:
+                db.session.delete(announcement)
+                db.session.commit()
+                flash('公告已删除', 'success')
+        
+        return redirect(url_for('manage_announcements'))
     
-    return redirect(url_for('settings'))
+    # 获取所有公告
+    announcements = Announcement.query.order_by(Announcement.priority.desc(), Announcement.created_at.desc()).all()
+    return render_template('announcements.html', announcements=announcements)
 
-@app.route('/optimize_database', methods=['POST'])
+@app.route('/edit_announcement/<int:announcement_id>', methods=['GET', 'POST'])
 @login_required
-def optimize_database():
-    """优化SQLite数据库"""
-    try:
-        # 获取数据库文件路径
-        db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        
-        # 确保数据库路径有效
-        if not os.path.exists(db_path):
-            flash('数据库文件不存在', 'danger')
-            return redirect(url_for('settings'))
-        
-        # 获取优化前的大小
-        size_before = os.path.getsize(db_path) / (1024 * 1024)  # MB
-        
-        # 连接数据库并执行VACUUM
-        conn = sqlite3.connect(db_path)
-        conn.execute('VACUUM')
-        conn.close()
-        
-        # 获取优化后的大小
-        size_after = os.path.getsize(db_path) / (1024 * 1024)  # MB
-        saved = size_before - size_after
-        
-        flash(f'数据库优化完成。优化前: {size_before:.2f} MB, 优化后: {size_after:.2f} MB, 节省: {saved:.2f} MB', 'success')
-        logger.info(f"Database optimized by admin {session['username']}, saved {saved:.2f} MB")
-    except Exception as e:
-        flash(f'数据库优化失败: {str(e)}', 'danger')
-        logger.error(f"Database optimization failed: {str(e)}")
+def edit_announcement(announcement_id):
+    """编辑公告"""
+    announcement = Announcement.query.get_or_404(announcement_id)
     
-    return redirect(url_for('settings'))
-
-@app.route('/system_status')
-@login_required
-def system_status():
-    """系统状态信息"""
-    # 获取数据库统计信息
-    metrics_count = Metrics.query.count()
-    client_count = Client.query.count()
+    if request.method == 'POST':
+        announcement.title = request.form.get('title')
+        announcement.content = request.form.get('content')
+        announcement.priority = int(request.form.get('priority', 0))
+        announcement.updated_at = datetime.now()
+        db.session.commit()
+        
+        flash('公告已更新', 'success')
+        return redirect(url_for('manage_announcements'))
     
-    # 计算每个客户端的数据点数量
-    client_data_counts = db.session.query(
-        Metrics.client_id, 
-        db.func.count(Metrics.id).label('count')
-    ).group_by(Metrics.client_id).all()
-    
-    # 获取客户端信息
-    client_stats = []
-    for client_id, count in client_data_counts:
-        client = Client.query.get(client_id)
-        if client:
-            client_stats.append({
-                'id': client.id,
-                'hostname': client.hostname,
-                'display_name': client.display_name or client.hostname,
-                'data_points': count,
-                'last_seen': client.last_seen
-            })
-    
-    # 估算数据库大小（如果使用SQLite）
-    db_size = None
-    if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-        db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        try:
-            db_size = os.path.getsize(db_path) / (1024 * 1024)  # MB
-        except:
-            pass
-    
-    return render_template('system_status.html', 
-                          metrics_count=metrics_count,
-                          client_count=client_count,
-                          client_stats=client_stats,
-                          db_size=db_size)
+    return render_template('edit_announcement.html', announcement=announcement)
 
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
@@ -553,7 +558,7 @@ def settings():
     # 获取当前时间
     current_time = datetime.now()
     
-    # 获取数据库大小和指标数量
+    # 获取数据库大小（简化版，因为移除了历史记录功能）
     db_size = None
     if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
         db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
@@ -562,17 +567,10 @@ def settings():
         except:
             pass
     
-    metrics_count = Metrics.query.count()
-    
-    # 获取所有客户端供数据清除选择
-    clients = Client.query.all()
-    
     return render_template('settings.html', 
                           client_count=client_count, 
                           current_time=current_time,
-                          clients=clients,
-                          db_size=db_size,
-                          metrics_count=metrics_count)
+                          db_size=db_size)
 
 if __name__ == '__main__':
     with app.app_context():
