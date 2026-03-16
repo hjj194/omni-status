@@ -1,0 +1,21 @@
+# Virtual environments
+venv/
+.venv/
+
+# Runtime artifacts
+*.db
+*.log
+server_config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
