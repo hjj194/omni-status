@@ -12,19 +12,22 @@ from datetime import datetime
 import subprocess
 import configparser
 import sys
+import concurrent.futures
 
 # 检查配置文件路径
 CONFIG_FILE = '/etc/system-monitor/client.conf'
 CLIENT_ID_FILE = '/etc/system-monitor/.client_id'
 LOG_FILE = '/var/log/system-monitor/client.log'
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=LOG_FILE
-)
+# 配置日志（带轮转，最大 10MB，保留 3 份备份）
+from logging.handlers import RotatingFileHandler
+_log_handler = RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3)
+_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
 logger = logging.getLogger('client_monitor')
+
+# nvidia-smi 可用性缓存：None=未检测, True=可用, False=不可用
+_nvidia_available = None
 
 # 默认配置
 DEFAULT_CONFIG = {
@@ -77,12 +80,20 @@ def get_client_id():
     return client_id
 
 def get_nvidia_gpu_info():
-    """获取NVIDIA GPU信息"""
+    """获取NVIDIA GPU信息（缓存可用性，避免重复 fork）"""
+    global _nvidia_available
+
+    if _nvidia_available is False:
+        return []
+
     try:
-        result = subprocess.run(['nvidia-smi', '--query-gpu=name,utilization.gpu,memory.used,memory.total', 
-                              '--format=csv,noheader,nounits'], 
-                             capture_output=True, text=True, check=True)
-        
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=name,utilization.gpu,memory.used,memory.total',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+        _nvidia_available = True
+
         gpus = []
         for i, line in enumerate(result.stdout.strip().split('\n')):
             if line.strip():
@@ -95,14 +106,16 @@ def get_nvidia_gpu_info():
                     'memory_total': float(mem_total)
                 })
         return gpus
-    except (subprocess.SubprocessError, FileNotFoundError):
-        logger.debug("未检测到NVIDIA GPU或nvidia-smi命令不可用")
+    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+        if _nvidia_available is None:
+            logger.debug("未检测到NVIDIA GPU或nvidia-smi命令不可用")
+        _nvidia_available = False
         return []
 
 def get_system_info(client_id):
     """收集系统信息"""
-    # CPU信息
-    cpu_usage = psutil.cpu_percent(interval=1)
+    # CPU信息（非阻塞，基于距上次调用的时间窗口计算）
+    cpu_usage = psutil.cpu_percent(interval=None)
     cpu_count = psutil.cpu_count()
     
     # 内存信息
@@ -123,12 +136,16 @@ def get_system_info(client_id):
     total_disk_used = 0
     
     for part in psutil.disk_partitions(all=False):
-        if os.name == 'nt' or part.fstype != 'squashfs':  # 避免Docker容器中的问题
+        if os.name == 'nt' or part.fstype not in ('squashfs', 'tmpfs', 'devtmpfs'):
             try:
-                usage = psutil.disk_usage(part.mountpoint)
+                # 带 3 秒超时，防止 NFS 等网络挂载点无响应时阻塞整个上报周期
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(psutil.disk_usage, part.mountpoint)
+                    usage = future.result(timeout=3)
+
                 total_disk_space += usage.total
                 total_disk_used += usage.used
-                
+
                 # 只添加根目录的详细信息
                 if part.mountpoint == '/' or (os.name == 'nt' and part.mountpoint == 'C:\\'):
                     disks.append({
@@ -138,6 +155,8 @@ def get_system_info(client_id):
                         'used': usage.used,
                         'percent': usage.percent
                     })
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"获取磁盘信息超时，跳过挂载点: {part.mountpoint}")
             except PermissionError:
                 logger.warning(f"没有权限访问挂载点: {part.mountpoint}")
             except Exception as e:
@@ -213,6 +232,9 @@ def main():
     
     # 获取客户端ID
     client_id = get_client_id()
+
+    # 初始化 CPU 采样基准（首次调用返回值无意义，丢弃）
+    psutil.cpu_percent(interval=None)
     
     logger.info(f"客户端监控服务启动，客户端ID: {client_id}")
     logger.info(f"服务器地址: {server_url}, 上报间隔: {report_interval}秒")

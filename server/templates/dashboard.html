@@ -159,6 +159,45 @@
         </div>
     </nav>
 
+    <!-- 总状态横幅 -->
+    {% if clients %}
+    {% set ns = namespace(offline=0, degraded=0) %}
+    {% for client in clients %}
+        {% if not client.is_online %}
+            {% set ns.offline = ns.offline + 1 %}
+        {% else %}
+            {% set total_disk = client.disks|selectattr('mountpoint', 'equalto', 'Total')|first %}
+            {% if client.cpu.usage_percent > 80 or client.memory.percent > 85 or (total_disk and total_disk.percent > 90) %}
+                {% set ns.degraded = ns.degraded + 1 %}
+            {% endif %}
+        {% endif %}
+    {% endfor %}
+    {% if ns.offline > 0 %}
+        {% set s_bg = "#b02a37" %}
+        {% set s_icon = "bi-exclamation-triangle-fill" %}
+        {% set s_title = "部分系统中断" %}
+        {% set s_sub = ns.offline|string + " 台主机离线，" + (clients|length - ns.offline)|string + " 台正常运行" %}
+    {% elif ns.degraded > 0 %}
+        {% set s_bg = "#997404" %}
+        {% set s_icon = "bi-exclamation-circle-fill" %}
+        {% set s_title = "部分系统性能降级" %}
+        {% set s_sub = ns.degraded|string + " 台主机资源紧张，" + (clients|length - ns.degraded)|string + " 台正常运行" %}
+    {% else %}
+        {% set s_bg = "#146c43" %}
+        {% set s_icon = "bi-check-circle-fill" %}
+        {% set s_title = "全系统运行正常" %}
+        {% set s_sub = "当前监控 " + clients|length|string + " 台主机，全部在线" %}
+    {% endif %}
+    <div style="background-color: {{ s_bg }}; color: #fff; padding: 20px 0; margin-bottom: 28px;">
+        <div class="container text-center">
+            <div style="font-size: 1.2rem; font-weight: 600; letter-spacing: 0.01em;">
+                <i class="bi {{ s_icon }} me-2"></i>{{ s_title }}
+            </div>
+            <div style="font-size: 0.82rem; opacity: 0.8; margin-top: 5px;">{{ s_sub }}</div>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="container">
         <!-- 公告区域 -->
         {% if announcements %}
@@ -169,7 +208,7 @@
                     <i class="bi bi-megaphone me-2"></i>
                     <strong>{{ announcement.title }}</strong>
                     <br>
-                    {{ announcement.content|replace('\n', '<br>')|safe }}
+                    {{ announcement.content|e|replace('\n', '<br>')|safe }}
                     <small class="text-muted d-block mt-2">发布时间: {{ announcement.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
                     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
@@ -199,6 +238,11 @@
                             <a href="{{ url_for('edit_client', client_id=client.id) }}" class="btn btn-sm btn-outline-primary" onclick="event.stopPropagation();" title="编辑客户端">
                                 <i class="bi bi-pencil"></i>
                             </a>
+                            <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" style="display:inline;" onclick="event.stopPropagation();" onsubmit="return confirm('确定删除客户端「{{ client.display_name }}」吗？此操作不可撤销。');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" title="删除客户端">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
                             {% endif %}
                             <i class="bi bi-chevron-down toggle-icon"></i>
                         </div>
@@ -284,7 +328,7 @@
                                 </div>
                                 <div class="col-6">
                                     <small class="text-muted">最后在线</small>
-                                    <div>{{ client.last_seen.strftime('%Y-%m-%d %H:%M') }}</div>
+                                    <div>{{ client.last_seen.strftime('%Y-%m-%d %H:%M') if client.last_seen else '从未连接' }}</div>
                                 </div>
                             </div>
                             

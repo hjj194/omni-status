@@ -7,23 +7,21 @@ import functools
 import json
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 import configparser
 
-# 配置日志
+# 配置日志（带轮转，最大 10MB，保留 5 份备份）
 # 确保日志目录存在，如果无法创建系统日志目录则回退到本地目录
 try:
     log_dir = '/var/log/system-monitor'
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, 'server.log')
 except (PermissionError, OSError):
-    # 如果无法创建系统日志目录，使用当前目录
     log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server.log')
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=log_file
-)
+_log_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
 logger = logging.getLogger('system_monitor_server')
 
 # 配置文件路径（使用绝对路径）
@@ -185,9 +183,10 @@ def init_db():
     
     # 添加display_order列（如果是旧数据库更新）
     try:
-        with app.app_context():
-            db.engine.execute('ALTER TABLE client ADD COLUMN display_order INTEGER DEFAULT 0')
-    except:
+        with db.engine.connect() as conn:
+            conn.execute(db.text('ALTER TABLE client ADD COLUMN display_order INTEGER DEFAULT 0'))
+            conn.commit()
+    except Exception:
         pass  # 如果列已存在则忽略错误
     
     # 创建默认管理员账户
@@ -217,10 +216,11 @@ def report():
     
     # 获取或创建客户端记录
     client = Client.query.get(data['client_id'])
-    if client is None:
+    is_new_client = client is None
+    if is_new_client:
         # 获取最大显示顺序
         max_order = db.session.query(db.func.max(Client.display_order)).scalar() or 0
-        
+
         client = Client(
             id=data['client_id'],
             hostname=data['hostname'],
@@ -231,13 +231,13 @@ def report():
         )
         db.session.add(client)
         logger.info(f"New client registered: {data['hostname']} ({data['ip_address']})")
-    
+
     # 更新客户端信息
     client.hostname = data['hostname']
     client.ip_address = data['ip_address']
     client.platform = data['platform']
     client.last_seen = datetime.now()
-    
+
     # 存储实时数据（不持久化）
     client_realtime_data[data['client_id']] = {
         'timestamp': datetime.fromisoformat(data['timestamp']),
@@ -247,19 +247,25 @@ def report():
         'gpu': data['gpu'],
         'uptime_seconds': data['uptime_seconds']
     }
-    
+
     db.session.commit()
-    
-    # 保存配置到文件（当有新客户端时自动保存）
-    if client.id not in [c.id for c in Client.query.all()[:-1]]:
+
+    # 仅当有新客户端注册时保存配置
+    if is_new_client:
         save_client_configs()
-    
+
     return jsonify({"status": "success"})
 
 @app.route('/')
 def dashboard():
     """主仪表盘页面"""
     clients = Client.query.order_by(Client.display_order).all()
+
+    # 清理已删除客户端残留的实时数据
+    valid_ids = {c.id for c in clients}
+    for stale_id in [cid for cid in client_realtime_data if cid not in valid_ids]:
+        del client_realtime_data[stale_id]
+
     client_data = []
     
     for client in clients:
@@ -437,6 +443,22 @@ def edit_client(client_id):
         return redirect(url_for('dashboard'))
     
     return render_template('edit_client.html', client=client)
+
+@app.route('/delete_client/<client_id>', methods=['POST'])
+@login_required
+def delete_client(client_id):
+    """删除客户端记录 (需要登录)"""
+    client = Client.query.get_or_404(client_id)
+    hostname = client.hostname
+
+    client_realtime_data.pop(client_id, None)
+    db.session.delete(client)
+    db.session.commit()
+    save_client_configs()
+
+    logger.info(f"Client deleted: {hostname} (ID: {client_id})")
+    flash(f'客户端 "{hostname}" 已删除', 'success')
+    return redirect(url_for('dashboard'))
 
 # 历史记录功能已移除 - 只保留实时监控
 
