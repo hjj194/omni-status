@@ -376,7 +376,6 @@
                             <div style="display:flex; gap:2px;">
                                 {% for day in client.uptime_history %}
                                 {% if day.status == 0 %}{% set bar_c = '#198754' %}
-                                {% elif day.status == 1 %}{% set bar_c = '#e6a817' %}
                                 {% elif day.status == 2 %}{% set bar_c = '#dc3545' %}
                                 {% else %}{% set bar_c = '#dee2e6' %}{% endif %}
                                 <div style="flex:1; height:18px; background-color:{{ bar_c }}; border-radius:2px;"

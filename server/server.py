@@ -186,16 +186,7 @@ class UptimeRecord(db.Model):
 client_realtime_data = {}
 
 def _compute_daily_status(data):
-    """根据上报数据判断当前健康状态（0=正常 1=降级）"""
-    cpu = data['cpu'].get('usage_percent', 0)
-    mem = data['memory'].get('percent', 0)
-    disk_full = any(
-        d.get('percent', 0) > 90
-        for d in data['disks']
-        if d.get('mountpoint') == 'Total'
-    )
-    if cpu > 80 or mem > 85 or disk_full:
-        return 1
+    """客户端能上报即视为在线（0=在线）"""
     return 0
 
 def _record_uptime(client_id, data):
