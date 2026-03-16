@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 from werkzeug.security import generate_password_hash, check_password_hash
 import functools
 import json
@@ -174,8 +174,39 @@ class Announcement(db.Model):
     is_active = db.Column(db.Boolean, default=True)  # 是否启用
     priority = db.Column(db.Integer, default=0)  # 优先级，数值越大越靠前
 
+class UptimeRecord(db.Model):
+    """每日在线状态快照，用于历史可用性展示"""
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.String(36), db.ForeignKey('client.id', ondelete='CASCADE'), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    status = db.Column(db.Integer, default=0)  # 0=正常 1=降级 2=中断
+    __table_args__ = (db.UniqueConstraint('client_id', 'date', name='uq_uptime_client_date'),)
+
 # 实时数据存储（不持久化到数据库）
 client_realtime_data = {}
+
+def _compute_daily_status(data):
+    """根据上报数据判断当前健康状态（0=正常 1=降级）"""
+    cpu = data['cpu'].get('usage_percent', 0)
+    mem = data['memory'].get('percent', 0)
+    disk_full = any(
+        d.get('percent', 0) > 90
+        for d in data['disks']
+        if d.get('mountpoint') == 'Total'
+    )
+    if cpu > 80 or mem > 85 or disk_full:
+        return 1
+    return 0
+
+def _record_uptime(client_id, data):
+    """写入或更新当天的可用性记录（同一天保留最差状态）"""
+    today = date_type.today()
+    new_status = _compute_daily_status(data)
+    record = UptimeRecord.query.filter_by(client_id=client_id, date=today).first()
+    if record is None:
+        db.session.add(UptimeRecord(client_id=client_id, date=today, status=new_status))
+    elif new_status > record.status:
+        record.status = new_status
 
 # 创建数据库和初始管理员
 def init_db():
@@ -247,6 +278,9 @@ def report():
         'gpu': data['gpu'],
         'uptime_seconds': data['uptime_seconds']
     }
+
+    # 写入每日可用性快照
+    _record_uptime(data['client_id'], data)
 
     db.session.commit()
 
@@ -346,9 +380,25 @@ def dashboard():
                 'display_order': client.display_order
             })
     
+    # 查询所有客户端最近 30 天的可用性记录
+    today = date_type.today()
+    days_30 = [today - timedelta(days=i) for i in range(29, -1, -1)]
+    records = UptimeRecord.query.filter(UptimeRecord.date >= days_30[0]).all()
+    uptime_lookup = {}
+    for r in records:
+        uptime_lookup.setdefault(r.client_id, {})[r.date] = r.status
+
+    # 为每个客户端生成 30 天列表
+    for c in client_data:
+        day_map = uptime_lookup.get(c['id'], {})
+        c['uptime_history'] = [
+            {'date': d.strftime('%m-%d'), 'status': day_map.get(d, -1)}
+            for d in days_30
+        ]
+
     # 获取公告
     announcements = Announcement.query.filter_by(is_active=True).order_by(Announcement.priority.desc(), Announcement.created_at.desc()).all()
-    
+
     return render_template('dashboard.html', clients=client_data, is_admin=session.get('logged_in', False), announcements=announcements)
 
 @app.route('/reorder', methods=['GET', 'POST'])
