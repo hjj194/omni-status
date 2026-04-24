@@ -103,7 +103,7 @@ class GpuHourlyUsage(db.Model):
 ```
 
 **设计要点:**
-- `hour` 为整点 `DATETIME`,通过 `now.replace(minute=0, second=0, microsecond=0)` 截取。时区跟随现有 `datetime.now()` 约定使用服务器本地时区(与 `UptimeRecord` 一致)。
+- `hour` 为整点 `DATETIME`,通过 `now.replace(minute=0, second=0, microsecond=0)` 截取。时区:整个项目(`hour` 截取、APScheduler cron、周报页面标题、LLM payload 的 `period`)**统一读取 `app.config['GPU_REPORT']['timezone']`**(默认 `tzlocal.get_localzone_name()`,可在 `server.conf` 的 `[gpu_report]` 段覆盖),与 `UptimeRecord` 的本地时间约定一致。
 - `vram_pct_avg` / `util_pct_avg` 存储增量计算后的小时均值,浮点误差累积 ~ 60 个样本可忽略。
 - `vram_pct_peak` / `util_pct_peak` 记录小时峰值,便于看"有没有突刺"。
 - `ok_sample_count` 与 `error_count` 互不相加 —— errored 样本不参与均值计算,仅单独计数。
@@ -193,14 +193,18 @@ APScheduler 在 Flask 应用启动时初始化:
 
 ```python
 from apscheduler.schedulers.background import BackgroundScheduler
+from tzlocal import get_localzone
 
 def init_scheduler(app):
-    sched = BackgroundScheduler(timezone=str(time.tzname[0]))
+    tz = app.config['GPU_REPORT'].get('timezone') or get_localzone()
+    sched = BackgroundScheduler(timezone=tz)
     sched.add_job(cleanup_hourly, 'cron', minute=5)
     sched.add_job(cleanup_llm_reports, 'cron', day_of_week='sun', hour=3)
     sched.add_job(generate_llm_summary, 'cron', day_of_week='mon', hour=9)
     sched.start()
 ```
+
+**注**:`str(time.tzname[0])` 在许多平台下不是合法的 IANA zone,不能直接喂给 APScheduler。这里统一用 `tzlocal.get_localzone()`,失败时可由配置覆盖。
 
 选择 APScheduler 理由:周一 9 点的 LLM 摘要定时本身就需要调度器,顺便复用做清理,比在 `/report` 里做 probabilistic cleanup 更干净。
 
@@ -322,9 +326,16 @@ def get_nvidia_gpu_info() -> list[dict]:
 
 server `/report` 处理时,对每张 `status='ok'` 的 GPU 更新 `client_realtime_data[client_id]['gpu_last_ok'][gpu_index] = now`。在渲染 dashboard 时,若当前 GPU `status='error'`,从该 dict 读取并显示"上次正常读数 X 分钟前"。失败时 fallback 到 "未知"。
 
-### 7.3 Jinja2 均值计算修正
+### 7.3 Jinja2 均值计算修正(选择:模板侧过滤)
 
-现有 `dashboard.html` 第 270 行用 `gpu.utilization` 和 `gpu.memory_used` 计算均值。需要在循环前先过滤掉 `status='error'` 的项,否则 `gpu.utilization` 不存在会 500。
+现有 `dashboard.html:270` 在 Jinja 模板里直接对 `client.gpu` 做 `{% set ns.total = ns.total + ([gpu.utilization, mem_pct]|max) %}`。当 `gpu.status == 'error'` 时 `gpu.utilization` 不存在,模板会 500。
+
+两种修法:
+
+- **A. 服务端预过滤**:在 `server.py` 的 dashboard 视图里,把传给模板的 `client_data[i]['gpu']` 拆成 `gpu_ok` 和 `gpu_error` 两个列表,模板分别渲染。
+- **B. 模板侧过滤**:在现有 `{% for gpu in client.gpu %}` 前加 `{% if gpu.status != 'error' %}` 护栏,并把错误项单独再渲染一个块。
+
+**选 B**。理由:A 需要改 `server.py` 里 dashboard 函数签名和内部数据结构,对 395 行的主文件影响大;B 只改模板一个文件,服务端数据结构不变,客户端契约变更对模板本地化。后续若模板复杂度增长,再重构到 A。
 
 ## 8. 报告页 `/gpu-report` 设计
 
@@ -346,8 +357,8 @@ server `/report` 处理时,对每张 `status='ok'` 的 GPU 更新 `client_realti
 
 **① 当前空闲 GPU**
 - 源数据:`client_realtime_data` 内存中的最新 GPU 数组
-- 判定:`status='ok' AND (memory_used / memory_total) < 0.15`
-- 排序:按空闲时长降序(需要回查 `GpuHourlyUsage` 找到上次 VRAM ≥ 15% 的小时)
+- 判定:`status='ok' AND (memory_used / memory_total) < idle_vram_threshold`(默认 15%)
+- 排序:按空闲时长降序。为避免对每张空闲卡单独回查表(N+1),实现上**一次性查询** `GpuHourlyUsage` 过去 7 天所有 `(client_id, gpu_index)` 的 `MAX(hour)`,再筛出 `vram_pct_avg ≥ idle_vram_threshold` 的最大 `hour`,Python 侧做 dict 查找。已有索引 `ix_gpu_hourly_hour` + unique `(client_id, gpu_index, hour)` 足够支撑。
 - 展示:网格卡片,每张卡显示 `hostname · GPU idx · 型号 · 当前 VRAM% · 已空闲 Xh`
 
 **② 7 天 VRAM 占用热力图**
@@ -361,11 +372,21 @@ server `/report` 处理时,对每张 `status='ok'` 的 GPU 更新 `client_realti
 - 纯 HTML + CSS Grid 实现,不引入 Chart.js(首期)
 
 **③ 长期空闲 GPU**
-- 判定:**过去 7 天 `vram_pct_avg < 20%` 且"低占用小时数" ≥ 120 / 168**
-  - 其中"低占用小时"定义为该小时 `vram_pct_avg < 20%`
+- 判定:**过去 7 天 `vram_pct_avg < longterm_vram_threshold` 且"低占用小时数" ≥ `longterm_hours_required`**(默认 20% / 120h)
+  - 其中"低占用小时"定义为该小时 `vram_pct_avg < longterm_vram_threshold`
 - **不包含** `VRAM 高 + util 低` 的情况(非目标 NG3)
 - 表格列:机器 / GPU / 7d VRAM 均值 / 7d util 均值 / 低占用小时数
 - 表头上方说明:"以下 GPU 近 7 天 VRAM 长期低占用,可考虑重新分配或复查是否有访问/调度障碍。"
+
+**三个阈值的语义区分**(容易混淆,UI 文案需明确):
+
+| 阈值 | 用途 | 默认 |
+|---|---|---|
+| `idle_vram_threshold` | Section ① 判定"此刻可以抢占调度" | 15% |
+| `heatmap_low_threshold` | 热力图"绿色"边界 | 20% |
+| `longterm_vram_threshold` | Section ③ 判定"这张卡长期没人用" | 20% |
+
+Section ① 的阈值(15%)比 Section ③(20%)更严,因为"现在就能用"需要更高的空闲信心;"长期没用"容忍一点小波动,所以放宽到 20%。两者是**不同问题**,不应合并成一个配置项。
 
 **④ 硬件异常记录**
 - 判定:7 天内 `error_count > 0` 的 (client, gpu) 组合
@@ -391,27 +412,34 @@ APScheduler cron:`day_of_week='mon', hour=9, minute=0`(可通过 `server.conf` �
 ### 9.2 数据准备
 
 ```python
-def build_llm_payload(now: datetime) -> dict:
+def build_llm_payload(now: datetime, config: dict) -> dict:
     period_end = now.replace(hour=0, minute=0, second=0, microsecond=0)
     period_start = period_end - timedelta(days=7)
+    low_vram_threshold = config['longterm_vram_threshold']
+
+    # 一次性拉取 7 天内全部 row,按 (client_id, gpu_index) 分组
+    all_rows = (GpuHourlyUsage.query
+                .filter(GpuHourlyUsage.hour >= period_start)
+                .filter(GpuHourlyUsage.hour <  period_end)
+                .all())
+    grouped: dict[tuple[str, int], list] = {}
+    for r in all_rows:
+        grouped.setdefault((r.client_id, r.gpu_index), []).append(r)
 
     clients_data = []
     for client in Client.query.order_by(Client.display_order).all():
         gpu_stats = []
-        for gpu_idx in range(_MAX_GPU_INDEX):
-            rows = (GpuHourlyUsage.query
-                    .filter_by(client_id=client.id, gpu_index=gpu_idx)
-                    .filter(GpuHourlyUsage.hour >= period_start)
-                    .all())
-            if not rows:
-                continue
+        # 只列出这客户端实际出现过的 gpu_index(不再枚举到某常数)
+        seen = [idx for (cid, idx) in grouped if cid == client.id]
+        for gpu_idx in sorted(set(seen)):
+            rows = grouped[(client.id, gpu_idx)]
             gpu_stats.append({
                 'idx': gpu_idx,
                 'name': rows[-1].gpu_name,
                 'vram_avg_7d': round(_weighted_avg(rows, 'vram_pct_avg'), 1),
                 'util_avg_7d': round(_weighted_avg(rows, 'util_pct_avg'), 1),
                 'hours_observed': len(rows),
-                'hours_low_vram': sum(1 for r in rows if r.vram_pct_avg < 20),
+                'hours_low_vram': sum(1 for r in rows if r.vram_pct_avg < low_vram_threshold),
                 'errors': sum(r.error_count for r in rows),
             })
         if gpu_stats:
@@ -423,6 +451,8 @@ def build_llm_payload(now: datetime) -> dict:
         'summary_stats': _global_summary(period_start, period_end),
     }
 ```
+
+注:7 天 × ~40 GPU × 1 row/hour ≈ 6.7k row,单次全量拉取对 SQLite 毫无压力,比嵌套查询简洁。
 
 Payload 目标:< 2000 input tokens(Haiku 定价下约 0.001 元)。
 
@@ -469,9 +499,24 @@ Payload 目标:< 2000 input tokens(Haiku 定价下约 0.001 元)。
 
 失败(所有重试都失败):写入 `LlmReport(status='error', content=<error message>)`。
 
+**Markdown → HTML 渲染管线**(服务端,避免引入前端 JS 库):
+
+```python
+import markdown
+import bleach
+
+_ALLOWED_TAGS = ['p','h1','h2','h3','h4','ul','ol','li','strong','em','code','pre','blockquote','br','hr']
+
+def render_markdown_safe(md_text: str) -> str:
+    html = markdown.markdown(md_text, extensions=['extra'])
+    return bleach.clean(html, tags=_ALLOWED_TAGS, strip=True)
+```
+
+模板中用 `{{ rendered_html|safe }}` 插入。`bleach` 保证即使 LLM 输出中包含恶意 HTML/JS 也被剥离。
+
 报告页渲染:
-- 最新一条 `status='ok'` 的 markdown 内容展示在顶部(用 `markdown` python 库或前端 `marked.js` 渲染)
-- 右上角一个 "查看历史摘要" 链接,展开显示过去 12 周的摘要
+- 最新一条 `status='ok'` 经上面管线渲染后展示在顶部
+- 右上角一个 "查看历史摘要" 链接,展开显示过去 12 周的摘要(同样走 `render_markdown_safe`)
 - 如果最新一条是 `status='error'`,显示"上次摘要生成失败(X 时间前),详情见日志",下方回退显示上一条成功的摘要
 
 ### 9.6 机密管理
@@ -495,6 +540,7 @@ longterm_hours_required = 120       ; Section ③ 至少这么多小时达标
 llm_model = claude-haiku-4-5-20251001
 llm_schedule_cron = 0 9 * * 1       ; 周一 9:00
 llm_report_retention = 12           ; 保留最近 N 条
+timezone =                          ; 留空则 tzlocal 自动检测;显式设置如 "Asia/Shanghai"
 ```
 
 `load_config()` 扩展读取 `[gpu_report]` 段,落到 `app.config['GPU_REPORT']`。
@@ -581,6 +627,7 @@ llm_report_retention = 12           ; 保留最近 N 条
 
 ```
 APScheduler>=3.10
+tzlocal>=5.0
 anthropic>=0.40
 markdown>=3.5
 bleach>=6.0       # XSS 过滤,markdown 渲染后清洗
@@ -607,7 +654,7 @@ bleach>=6.0       # XSS 过滤,markdown 渲染后清洗
 
 `datetime.now()` 使用服务器本地时区。若服务器在 UTC,而导师看周报习惯按北京时间,"过去 7 天"的边界可能差 8 小时。
 
-**缓解**:`hour` 全部用服务器本地时间,报告页标题明确标注时区;如需跨时区支持,后续用 UTC 存储 + 前端按浏览器时区展示。
+**缓解**:`server.conf` 的 `[gpu_report] timezone` 统一控制 hour bucket、scheduler、页面标题、LLM payload 的 period(见 Section 5.2)。默认用 `tzlocal` 自动检测,可显式配置 `Asia/Shanghai`。如需跨时区支持,后续用 UTC 存储 + 前端按浏览器时区展示。
 
 ### 15.2 APScheduler 多进程下的重复触发
 
