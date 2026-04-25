@@ -5,4 +5,5 @@ __pycache__/
 *.log
 server/server_config.json
 server/monitor.db
+demo.db
 .claude/PRPs/
