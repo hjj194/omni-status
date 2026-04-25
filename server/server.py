@@ -30,6 +30,9 @@ def _make_log_handler():
 
 _log_handler = _make_log_handler()
 logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
+# Werkzeug 默认每个请求都打 INFO,客户端每分钟上报一次会把日志刷爆;
+# 只保留 WARNING 及以上(404/500 等)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
 logger = logging.getLogger('system_monitor_server')
 
 # 配置文件路径（使用绝对路径）

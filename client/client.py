@@ -249,7 +249,8 @@ def report_to_server(server_url, data):
     try:
         response = requests.post(server_url, json=data, timeout=10)
         if response.status_code == 200:
-            logger.info(f"数据成功上报到服务器，状态码: {response.status_code}")
+            # 成功上报降级为 DEBUG 避免日志噪音(每 60s 一次,长期会撑满 40MB 配额)
+            logger.debug(f"数据成功上报到服务器，状态码: {response.status_code}")
             return True
         else:
             logger.error(f"服务器返回错误，状态码: {response.status_code}, 响应: {response.text}")
