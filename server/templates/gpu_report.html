@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU 使用报告 - Omni-Server-Status</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; }
+        .navbar { margin-bottom: 25px; box-shadow: 0 2px 10px rgba(0,0,0,.1); }
+        .card {
+            border-radius: 12px;
+            box-shadow: 0 4px 8px rgba(0,0,0,.1);
+            border: none;
+            margin-bottom: 20px;
+        }
+        .card-header {
+            border-radius: 12px 12px 0 0 !important;
+            background-color: #fff;
+            border-bottom: 1px solid rgba(0,0,0,.05);
+            padding: 15px 20px;
+        }
+        .card-body { padding: 20px; }
+        .summary-stat {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+        .summary-stat .num { font-size: 1.8rem; font-weight: 600; }
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: 160px 1fr;
+            gap: 3px;
+            align-items: center;
+            font-size: 11px;
+        }
+        .heatmap-label { color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .heatmap-row {
+            display: grid;
+            grid-template-columns: repeat(168, 1fr);
+            gap: 1px;
+            height: 14px;
+        }
+        .hm-cell { border-radius: 1px; cursor: default; }
+        .hm-nodata { background: #e5e7eb; }
+        .hm-low    { background: #86efac; }
+        .hm-mid    { background: #fbbf24; }
+        .hm-high   { background: #ef4444; }
+        .hm-error  { background: #6b7280; }
+        .heatmap-legend { display: flex; gap: 14px; font-size: 11px; color: #6b7280; margin-top: 10px; }
+        .legend-box { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
+        .idle-card {
+            border: 1px solid #bbf7d0;
+            background: #f0fdf4;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 13px;
+        }
+        .error-gpu-row { background: #fef2f2; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/">
+            <i class="bi bi-pc-display"></i> Omni-Server-Status
+        </a>
+        <div class="d-flex">
+            <a href="{{ url_for('dashboard') }}" class="btn btn-sm btn-outline-light me-2">
+                <i class="bi bi-arrow-left"></i> 返回仪表盘
+            </a>
+            <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-light">
+                <i class="bi bi-box-arrow-right"></i> 登出
+            </a>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid px-4">
+    <h2 class="mb-4"><i class="bi bi-bar-chart-line"></i> GPU 使用报告</h2>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}{% for cat, msg in messages %}
+        <div class="alert alert-{{ cat }}">{{ msg }}</div>
+      {% endfor %}{% endif %}
+    {% endwith %}
+
+    <!-- 顶部摘要 -->
+    <div class="row mb-4">
+        <div class="col-6 col-md-3 mb-2">
+            <div class="summary-stat">
+                <div class="small text-muted">在线客户端</div>
+                <div class="num text-success">{{ summary_stats.online_clients }}<span class="fs-6 text-muted"> / {{ summary_stats.total_clients }}</span></div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3 mb-2">
+            <div class="summary-stat">
+                <div class="small text-muted">GPU 总数</div>
+                <div class="num">{{ summary_stats.total_gpus }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3 mb-2">
+            <div class="summary-stat" style="background:#f0fdf4;border-color:#bbf7d0;">
+                <div class="small text-muted">当前空闲</div>
+                <div class="num text-success">{{ summary_stats.idle_count }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3 mb-2">
+            <div class="summary-stat {% if summary_stats.error_gpu_count > 0 %}{% set _='s' %}{% endif %}" style="{% if summary_stats.error_gpu_count > 0 %}background:#fef2f2;border-color:#fecaca;{% endif %}">
+                <div class="small text-muted">本周异常 GPU</div>
+                <div class="num {% if summary_stats.error_gpu_count > 0 %}text-danger{% endif %}">{{ summary_stats.error_gpu_count }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 摘要 -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-robot"></i> 本周 AI 摘要</h5>
+            {% if history %}
+            <a class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" href="#summary-history">
+                查看历史
+            </a>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            {% if latest_summary_html %}
+                {{ latest_summary_html|safe }}
+                <small class="text-muted d-block mt-2">
+                    生成于 {{ latest_summary.generated_at.strftime('%Y-%m-%d %H:%M') }}
+                    · 模型 {{ latest_summary.model }}
+                    {% if latest_summary.input_tokens %}· {{ latest_summary.input_tokens }}in/{{ latest_summary.output_tokens }}out tokens{% endif %}
+                </small>
+            {% elif latest_summary and latest_summary.status == 'error' %}
+                <div class="alert alert-warning mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    上次摘要生成失败 ({{ latest_summary.generated_at.strftime('%m-%d %H:%M') }}),详情见服务器日志。下次运行:下周一 09:00。
+                </div>
+            {% else %}
+                <div class="alert alert-info mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    尚未生成摘要。下次生成:下周一 09:00。
+                    {% if not config.get('ANTHROPIC_API_KEY') %}<br><small>提示:未检测到 <code>ANTHROPIC_API_KEY</code> 环境变量。</small>{% endif %}
+                </div>
+            {% endif %}
+        </div>
+        {% if history %}
+        <div class="collapse" id="summary-history">
+            <div class="card-body border-top">
+                <h6 class="text-muted mb-3">历史摘要(最近 {{ history|length }} 条)</h6>
+                {% for item in history %}
+                <div class="mb-3 pb-3 border-bottom">
+                    <small class="text-muted">{{ item.generated_at.strftime('%Y-%m-%d %H:%M') }}</small>
+                    {% if item.html %}
+                        {{ item.html|safe }}
+                    {% else %}
+                        <div class="text-danger small">生成失败: {{ item.error }}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ① 当前空闲 GPU -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-check-circle text-success"></i> ① 当前空闲 GPU(可调度)</h5>
+        </div>
+        <div class="card-body">
+            {% if idle_gpus %}
+            <div class="row g-2">
+                {% for g in idle_gpus %}
+                <div class="col-md-4 col-lg-3">
+                    <div class="idle-card">
+                        <div><b>{{ g.display_name }}</b> · GPU {{ g.gpu_index }}</div>
+                        <div class="text-muted">{{ g.gpu_name }} · VRAM {{ g.vram_pct }}%</div>
+                        <div class="text-success" style="font-size:11px;">
+                            已空闲 {% if g.idle_minutes >= 60 %}{{ (g.idle_minutes // 60)|int }}h {{ (g.idle_minutes % 60)|int }}m{% else %}{{ g.idle_minutes }}m{% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-muted">当前无空闲 GPU</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ② 7 天热力图 -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-grid-3x3"></i> ② 7 天 VRAM 占用热力图</h5>
+        </div>
+        <div class="card-body" style="overflow-x:auto;">
+            {% if heatmap.rows %}
+            <div class="heatmap-grid mb-2">
+                <div></div>
+                <div style="display:flex;justify-content:space-between;color:#9ca3af;font-size:10px;padding:0 2px;">
+                    <span>7天前</span><span>6d</span><span>5d</span><span>4d</span><span>3d</span><span>2d</span><span>昨天</span><span>今天</span>
+                </div>
+            </div>
+            {% for row in heatmap.rows %}
+            <div class="heatmap-grid mb-1">
+                <div class="heatmap-label" title="{{ row.hostname }} GPU{{ row.gpu_index }}">
+                    {{ row.hostname }} GPU{{ row.gpu_index }}
+                </div>
+                <div class="heatmap-row">
+                    {% for cell in row.cells %}
+                    <div class="hm-cell hm-{{ cell.status }}"
+                         title="{{ cell.hour[:13] }} | VRAM:{{ cell.vram_avg }}% util:{{ cell.util_avg }}% ok:{{ cell.ok }} err:{{ cell.err }}">
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+            <div class="heatmap-legend mt-2">
+                <span><span class="legend-box" style="background:#86efac;"></span>空闲(&lt;20%)</span>
+                <span><span class="legend-box" style="background:#fbbf24;"></span>中等</span>
+                <span><span class="legend-box" style="background:#ef4444;"></span>高占用(≥70%)</span>
+                <span><span class="legend-box" style="background:#6b7280;"></span>故障/无数据</span>
+                <span><span class="legend-box" style="background:#e5e7eb;"></span>无数据</span>
+            </div>
+            {% else %}
+            <div class="text-muted">暂无历史数据(客户端首次上报后开始积累)</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ③ 长期空闲 GPU -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-clock-history text-secondary"></i> ③ 长期空闲 GPU</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if longterm_idle %}
+            <p class="text-muted small px-3 pt-3 mb-1">以下 GPU 近 7 天 VRAM 长期低占用,可考虑重新分配或复查是否有访问/调度障碍。</p>
+            <table class="table table-sm mb-0">
+                <thead class="table-light">
+                    <tr><th>机器</th><th>GPU</th><th class="text-center">7d VRAM 均值</th><th class="text-center">7d util 均值</th><th class="text-center">低占用小时数</th></tr>
+                </thead>
+                <tbody>
+                    {% for g in longterm_idle %}
+                    <tr>
+                        <td>{{ g.display_name }}</td>
+                        <td>{{ g.gpu_index }} · {{ g.gpu_name }}</td>
+                        <td class="text-center">{{ g.vram_avg_7d }}%</td>
+                        <td class="text-center">{{ g.util_avg_7d }}%</td>
+                        <td class="text-center">{{ g.low_hours }} / {{ g.total_hours }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="text-muted p-3">暂无长期空闲 GPU</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ④ 硬件异常记录 -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-exclamation-triangle text-danger"></i> ④ 硬件异常记录</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if error_gpus %}
+            <table class="table table-sm mb-0">
+                <thead class="table-light">
+                    <tr><th>机器</th><th>GPU</th><th class="text-center">报错小时数</th><th class="text-center">报错样本总数</th><th>最近报错</th></tr>
+                </thead>
+                <tbody>
+                    {% for g in error_gpus %}
+                    <tr class="error-gpu-row">
+                        <td>{{ g.display_name }}</td>
+                        <td>{{ g.gpu_index }} · {{ g.gpu_name }}</td>
+                        <td class="text-center">{{ g.err_hours }}</td>
+                        <td class="text-center">{{ g.err_samples }}</td>
+                        <td style="font-family:monospace;font-size:11px;">
+                            {% if g.latest_error %}{{ g.latest_error|e|truncate(60) }}{% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="text-muted p-3">本周无硬件异常记录</div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

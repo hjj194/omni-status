@@ -1,1 +1,8 @@
 .superpowers/
+.coverage
+__pycache__/
+*.pyc
+*.log
+server/server_config.json
+server/monitor.db
+.claude/PRPs/

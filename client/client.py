@@ -21,8 +21,22 @@ LOG_FILE = '/var/log/system-monitor/client.log'
 
 # 配置日志（带轮转，最大 10MB，保留 3 份备份）
 from logging.handlers import RotatingFileHandler
-_log_handler = RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3)
-_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+def _make_client_log_handler():
+    for candidate in [LOG_FILE,
+                      os.path.join(os.path.dirname(os.path.abspath(__file__)), 'client.log')]:
+        try:
+            os.makedirs(os.path.dirname(candidate), exist_ok=True)
+            h = RotatingFileHandler(candidate, maxBytes=10 * 1024 * 1024, backupCount=3)
+            h.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            return h
+        except (PermissionError, OSError):
+            continue
+    h = logging.StreamHandler()
+    h.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    return h
+
+_log_handler = _make_client_log_handler()
 logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
 logger = logging.getLogger('client_monitor')
 
@@ -79,8 +93,35 @@ def get_client_id():
     
     return client_id
 
+def _parse_gpu_line(i: int, line: str) -> dict:
+    """解析 nvidia-smi 单行输出;解析失败返回 status='error' 样本。"""
+    try:
+        name, utilization, mem_used, mem_total = line.split(', ')
+        return {
+            'index': i,
+            'name': name.strip(),
+            'status': 'ok',
+            'utilization': float(utilization),
+            'memory_used': float(mem_used),
+            'memory_total': float(mem_total),
+        }
+    except (ValueError, IndexError) as e:
+        name = line.split(', ')[0].strip() if ',' in line else f'GPU{i}'
+        logger.warning(f"GPU {i} 解析失败: {line!r} -> {e}")
+        return {
+            'index': i,
+            'name': name,
+            'status': 'error',
+            'error': line.strip(),
+            'timestamp': datetime.now().isoformat(),
+        }
+
+
 def get_nvidia_gpu_info():
-    """获取NVIDIA GPU信息（缓存可用性，避免重复 fork）"""
+    """获取NVIDIA GPU信息（缓存可用性，避免重复 fork）。
+
+    单张卡解析失败返回 status='error' 样本,不影响其他卡,也不锁定可用性缓存。
+    """
     global _nvidia_available
 
     if _nvidia_available is False:
@@ -93,24 +134,17 @@ def get_nvidia_gpu_info():
             capture_output=True, text=True, check=True, timeout=5
         )
         _nvidia_available = True
-
-        gpus = []
-        for i, line in enumerate(result.stdout.strip().split('\n')):
-            if line.strip():
-                name, utilization, mem_used, mem_total = line.split(', ')
-                gpus.append({
-                    'index': i,
-                    'name': name,
-                    'utilization': float(utilization),
-                    'memory_used': float(mem_used),
-                    'memory_total': float(mem_total)
-                })
-        return gpus
     except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
         if _nvidia_available is None:
             logger.debug("未检测到NVIDIA GPU或nvidia-smi命令不可用")
         _nvidia_available = False
         return []
+
+    gpus = []
+    for i, line in enumerate(result.stdout.strip().split('\n')):
+        if line.strip():
+            gpus.append(_parse_gpu_line(i, line))
+    return gpus
 
 def get_system_info(client_id):
     """收集系统信息"""

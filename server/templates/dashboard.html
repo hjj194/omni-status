@@ -132,6 +132,10 @@
                 </span>
                 {% if is_admin %}
                 <div class="btn-group">
+                    <a href="{{ url_for('gpu_report.report_page') }}" class="btn btn-sm btn-outline-light" title="GPU 报告">
+                        <i class="bi bi-bar-chart-line"></i>
+                        <span class="d-none d-md-inline ms-1">GPU 报告</span>
+                    </a>
                     <a href="{{ url_for('manage_announcements') }}" class="btn btn-sm btn-outline-light" title="公告管理">
                         <i class="bi bi-megaphone"></i>
                         <span class="d-none d-md-inline ms-1">公告</span>
@@ -263,14 +267,16 @@
                             </div>
                             {% endif %}
                             
-                            <!-- GPU 使用情况 - 如果有（取核心/显存较高者） -->
+                            <!-- GPU 使用情况 - 如果有（取核心/显存较高者，跳过 error 卡） -->
                             {% if client.gpu %}
-                            {% set ns = namespace(total=0) %}
-                            {% for gpu in client.gpu %}
-                                {% set mem_pct = (gpu.memory_used / gpu.memory_total * 100) if gpu.memory_total > 0 else 0 %}
+                            {% set ns = namespace(total=0, ok_count=0) %}
+                            {% for gpu in client.gpu if gpu.status != 'error' %}
+                                {% set mem_pct = (gpu.memory_used / gpu.memory_total * 100) if gpu.get('memory_total', 0) > 0 else 0 %}
                                 {% set ns.total = ns.total + ([gpu.utilization, mem_pct]|max) %}
+                                {% set ns.ok_count = ns.ok_count + 1 %}
                             {% endfor %}
-                            {% set avg_gpu_usage = (ns.total / client.gpu|length)|round(1) %}
+                            {% if ns.ok_count > 0 %}
+                            {% set avg_gpu_usage = (ns.total / ns.ok_count)|round(1) %}
                             <div class="metric-label mt-3">
                                 <span><i class="bi bi-gpu-card metric-icon"></i>GPU</span>
                                 <span class="metric-value">{{ avg_gpu_usage }}%</span>
@@ -282,6 +288,12 @@
                                     aria-valuenow="{{ avg_gpu_usage }}" aria-valuemin="0" aria-valuemax="100">
                                 </div>
                             </div>
+                            {% elif client.gpu|length > 0 %}
+                            <div class="metric-label mt-3">
+                                <span><i class="bi bi-gpu-card metric-icon"></i>GPU</span>
+                                <span class="metric-value text-danger"><i class="bi bi-exclamation-triangle"></i> 异常</span>
+                            </div>
+                            {% endif %}
                             {% endif %}
                         </div>
                         
@@ -341,6 +353,22 @@
                             <div class="mb-3">
                                 <small class="text-muted">GPU详情</small>
                                 {% for gpu in client.gpu %}
+                                {% if gpu.status == 'error' %}
+                                <div class="mt-2 p-2" style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;">
+                                    <div class="small" style="color:#991b1b;">
+                                        <i class="bi bi-exclamation-triangle"></i>
+                                        <b>{{ gpu.name }}(GPU {{ gpu.index }})</b> —— 硬件/驱动异常
+                                    </div>
+                                    <div class="small mt-1" style="color:#991b1b;font-family:monospace;word-break:break-all;">
+                                        {{ gpu.error|e }}
+                                    </div>
+                                    {% if gpu.last_ok_minutes_ago is not none %}
+                                    <div class="small text-muted mt-1">上次正常读数 {{ gpu.last_ok_minutes_ago }} 分钟前</div>
+                                    {% else %}
+                                    <div class="small text-muted mt-1">无正常读数记录</div>
+                                    {% endif %}
+                                </div>
+                                {% else %}
                                 <div class="mt-2">
                                     <div class="small mb-1 d-flex justify-content-between">
                                         <span>{{ gpu.name }} - 核心使用率</span>
@@ -348,14 +376,14 @@
                                     </div>
                                     <div class="progress" style="height: 8px;">
                                         {% set gpu_util_color = "bg-success" if gpu.utilization < 50 else ("bg-warning" if gpu.utilization < 80 else "bg-danger") %}
-                                        <div class="progress-bar {{ gpu_util_color }}" role="progressbar" 
-                                            style="width: {{ gpu.utilization }}%;" 
+                                        <div class="progress-bar {{ gpu_util_color }}" role="progressbar"
+                                            style="width: {{ gpu.utilization }}%;"
                                             aria-valuenow="{{ gpu.utilization }}" aria-valuemin="0" aria-valuemax="100">
                                         </div>
                                     </div>
-                                    
-                                    <div class="small text-muted mt-2">显存详情: {{ gpu.memory_used }} MB / {{ gpu.memory_total }} MB</div>
+                                    <div class="small text-muted mt-2">显存: {{ gpu.memory_used|int }} MB / {{ gpu.memory_total|int }} MB</div>
                                 </div>
+                                {% endif %}
                                 {% endfor %}
                             </div>
                             {% endif %}

@@ -2,3 +2,8 @@ flask==2.2.3
 flask-sqlalchemy==3.0.3
 werkzeug==2.2.3
 sqlalchemy==2.0.4
+APScheduler>=3.10
+tzlocal>=5.0
+anthropic>=0.40
+Markdown>=3.5
+bleach>=6.0

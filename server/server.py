@@ -9,18 +9,26 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 import configparser
+from auth import login_required
 
 # 配置日志（带轮转，最大 10MB，保留 5 份备份）
-# 确保日志目录存在，如果无法创建系统日志目录则回退到本地目录
-try:
-    log_dir = '/var/log/system-monitor'
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, 'server.log')
-except (PermissionError, OSError):
-    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server.log')
+def _make_log_handler():
+    for candidate in [
+        os.path.join('/var/log/system-monitor', 'server.log'),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server.log'),
+    ]:
+        try:
+            os.makedirs(os.path.dirname(candidate), exist_ok=True)
+            h = RotatingFileHandler(candidate, maxBytes=10 * 1024 * 1024, backupCount=5)
+            h.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            return h
+        except (PermissionError, OSError):
+            continue
+    h = logging.StreamHandler()
+    h.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    return h
 
-_log_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
-_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+_log_handler = _make_log_handler()
 logging.basicConfig(level=logging.INFO, handlers=[_log_handler])
 logger = logging.getLogger('system_monitor_server')
 
@@ -135,11 +143,17 @@ config = load_config()
 
 # 配置Flask应用
 app = Flask(__name__)
-# 使用绝对路径存储数据库
-db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor.db')
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = config['secret_key']  # 用于session
+
+# 测试时可通过环境变量覆盖为 sqlite:///:memory:
+_test_db = os.environ.get('FLASK_TESTING_DB')
+if _test_db:
+    app.config['SQLALCHEMY_DATABASE_URI'] = _test_db
+else:
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor.db')
+    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+
 db = SQLAlchemy(app)
 
 # 数据模型
@@ -201,6 +215,7 @@ def _record_uptime(client_id, data):
 
 # 创建数据库和初始管理员
 def init_db():
+    import gpu_report  # noqa: F401 — 触发 GpuHourlyUsage / LlmReport 模型注册
     db.create_all()
     
     # 添加display_order列（如果是旧数据库更新）
@@ -221,15 +236,6 @@ def init_db():
     
     # 从配置文件加载客户端配置
     load_client_configs()
-
-# 装饰器：需要登录
-def login_required(f):
-    @functools.wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'logged_in' not in session:
-            return redirect(url_for('login', next=request.url))
-        return f(*args, **kwargs)
-    return decorated_function
 
 @app.route('/report', methods=['POST'])
 def report():
@@ -260,6 +266,14 @@ def report():
     client.platform = data['platform']
     client.last_seen = datetime.now()
 
+    # 保留上次各 GPU 正常读数时间(用于 dashboard 显示)
+    existing_rt = client_realtime_data.get(data['client_id'], {})
+    gpu_last_ok = dict(existing_rt.get('gpu_last_ok', {}))
+    now_ts = datetime.now()
+    for gpu in data.get('gpu', []):
+        if gpu.get('status', 'ok') != 'error':
+            gpu_last_ok[gpu['index']] = now_ts
+
     # 存储实时数据（不持久化）
     client_realtime_data[data['client_id']] = {
         'timestamp': datetime.fromisoformat(data['timestamp']),
@@ -267,13 +281,23 @@ def report():
         'memory': data['memory'],
         'disks': data['disks'],
         'gpu': data['gpu'],
+        'gpu_last_ok': gpu_last_ok,
         'uptime_seconds': data['uptime_seconds']
     }
 
     # 写入每日可用性快照
     _record_uptime(data['client_id'], data)
-
     db.session.commit()
+
+    # GPU 小时聚合(独立提交,失败不影响 dashboard)
+    try:
+        from gpu_report import ingest_hourly_sample
+        for gpu in data.get('gpu', []):
+            ingest_hourly_sample(data['client_id'], gpu, now_ts)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.warning(f"GPU 小时样本写入失败: {e}")
 
     # 仅当有新客户端注册时保存配置
     if is_new_client:
@@ -333,7 +357,21 @@ def dashboard():
             if root_disk:
                 filtered_disks.append(root_disk)
             filtered_disks.append(total_disk_info)
-            
+
+            # 为每张 GPU 注入 last_ok_minutes_ago(坏卡展示用)
+            gpu_last_ok = realtime_data.get('gpu_last_ok', {})
+            now_for_gpu = datetime.now()
+            gpu_list = []
+            for gpu in realtime_data.get('gpu', []):
+                g = dict(gpu)
+                if g.get('status') == 'error':
+                    last_ok = gpu_last_ok.get(g.get('index'))
+                    if last_ok:
+                        g['last_ok_minutes_ago'] = int((now_for_gpu - last_ok).total_seconds() // 60)
+                    else:
+                        g['last_ok_minutes_ago'] = None
+                gpu_list.append(g)
+
             client_data.append({
                 'id': client.id,
                 'hostname': client.hostname,
@@ -347,7 +385,7 @@ def dashboard():
                 'cpu': realtime_data['cpu'],
                 'memory': realtime_data['memory'],
                 'disks': filtered_disks,
-                'gpu': realtime_data['gpu'],
+                'gpu': gpu_list,
                 'uptime': uptime_str,
                 'display_order': client.display_order
             })
@@ -647,9 +685,18 @@ def settings():
                           current_time=current_time,
                           db_size=db_size)
 
+# 注册 GPU 报告 Blueprint(在所有模型定义之后)
+from gpu_report import gpu_report_bp  # noqa: E402
+app.register_blueprint(gpu_report_bp)
+
 if __name__ == '__main__':
     with app.app_context():
         init_db()  # 初始化数据库和创建管理员
-    
+
+    # APScheduler 只在真正的主进程中启动(避免 debug reloader 双起)
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not config.get('debug', False):
+        from gpu_report import init_scheduler
+        init_scheduler(app)
+
     # 使用配置文件中的主机和端口
     app.run(host=config['host'], port=config['port'], debug=config['debug'])
