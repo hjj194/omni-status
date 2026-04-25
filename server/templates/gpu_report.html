@@ -31,18 +31,22 @@
         .summary-stat .num { font-size: 1.8rem; font-weight: 600; }
         .heatmap-grid {
             display: grid;
-            grid-template-columns: 160px 1fr;
-            gap: 3px;
+            grid-template-columns: 220px 1fr;
+            gap: 4px;
             align-items: center;
             font-size: 11px;
         }
-        .heatmap-label { color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .heatmap-label {
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            user-select: none;
+        }
         .heatmap-row {
             display: grid;
             grid-template-columns: repeat(168, 1fr);
             gap: 1px;
-            height: 14px;
+            height: 16px;
         }
+        .heatmap-row.gpu-row { height: 11px; }
         .hm-cell { border-radius: 1px; cursor: default; }
         .hm-nodata { background: #e5e7eb; }
         .hm-low    { background: #86efac; }
@@ -51,6 +55,23 @@
         .hm-error  { background: #6b7280; }
         .heatmap-legend { display: flex; gap: 14px; font-size: 11px; color: #6b7280; margin-top: 10px; }
         .legend-box { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
+        .machine-toggle {
+            cursor: pointer; padding: 2px 4px; border-radius: 4px;
+            display: flex; align-items: center; gap: 4px;
+            color: #1f2937; font-weight: 500;
+        }
+        .machine-toggle:hover { background: #f3f4f6; }
+        .machine-toggle .chevron {
+            transition: transform 0.15s ease;
+            color: #9ca3af;
+        }
+        .machine-toggle.expanded .chevron { transform: rotate(90deg); }
+        .gpu-detail { display: none; margin-left: 16px; }
+        .gpu-detail.expanded { display: contents; }
+        .gpu-row-label {
+            font-size: 10px; color: #6b7280; padding-left: 24px;
+        }
+        .machine-meta { color: #9ca3af; font-size: 10px; margin-left: 4px; }
         .idle-card {
             border: 1px solid #bbf7d0;
             background: #f0fdf4;
@@ -199,32 +220,52 @@
             <h5 class="mb-0"><i class="bi bi-grid-3x3"></i> ② 7 天 VRAM 占用热力图</h5>
         </div>
         <div class="card-body" style="overflow-x:auto;">
-            {% if heatmap.rows %}
+            {% if heatmap.machines %}
             <div class="heatmap-grid mb-2">
                 <div></div>
                 <div style="display:flex;justify-content:space-between;color:#9ca3af;font-size:10px;padding:0 2px;">
                     <span>7天前</span><span>6d</span><span>5d</span><span>4d</span><span>3d</span><span>2d</span><span>昨天</span><span>今天</span>
                 </div>
             </div>
-            {% for row in heatmap.rows %}
-            <div class="heatmap-grid mb-1">
-                <div class="heatmap-label" title="{{ row.hostname }} GPU{{ row.gpu_index }}">
-                    {{ row.hostname }} GPU{{ row.gpu_index }}
+            <div class="d-flex justify-content-between align-items-center mb-2 px-1" style="font-size:11px;color:#6b7280;">
+                <span>共 {{ heatmap.machines|length }} 台机器,点击展开查看每张卡</span>
+                <button id="expand-all" class="btn btn-sm btn-link p-0" style="font-size:11px;">全部展开 / 折叠</button>
+            </div>
+            {% for m in heatmap.machines %}
+            <div class="heatmap-grid mb-1" data-machine-id="{{ m.client_id }}">
+                <div class="machine-toggle" onclick="toggleMachine('{{ m.client_id }}', this)">
+                    <i class="bi bi-chevron-right chevron"></i>
+                    <span class="text-truncate" title="{{ m.display_name }}">{{ m.display_name }}</span>
+                    <span class="machine-meta">×{{ m.gpu_count }}</span>
                 </div>
-                <div class="heatmap-row">
-                    {% for cell in row.cells %}
+                <div class="heatmap-row" title="点击展开">
+                    {% for cell in m.rollup_cells %}
                     <div class="hm-cell hm-{{ cell.status }}"
-                         title="{{ cell.hour[:13] }} | VRAM:{{ cell.vram_avg }}% util:{{ cell.util_avg }}% ok:{{ cell.ok }} err:{{ cell.err }}">
+                         title="{{ cell.hour[:13] }} | 全机最高 VRAM: {% if cell.vram_avg is not none %}{{ cell.vram_avg }}%{% else %}—{% endif %} | err:{{ cell.err_total }}">
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% for gpu in m.gpus %}
+            <div class="heatmap-grid gpu-detail mb-1" data-parent="{{ m.client_id }}">
+                <div class="gpu-row-label" title="{{ gpu.gpu_name }}">
+                    └ GPU {{ gpu.gpu_index }} · {{ gpu.gpu_name }}
+                </div>
+                <div class="heatmap-row gpu-row">
+                    {% for cell in gpu.cells %}
+                    <div class="hm-cell hm-{{ cell.status }}"
+                         title="{{ cell.hour[:13] }} | VRAM:{% if cell.vram_avg is not none %}{{ cell.vram_avg }}%{% else %}—{% endif %} util:{% if cell.util_avg is not none %}{{ cell.util_avg }}%{% else %}—{% endif %} ok:{{ cell.ok }} err:{{ cell.err }}">
                     </div>
                     {% endfor %}
                 </div>
             </div>
             {% endfor %}
+            {% endfor %}
             <div class="heatmap-legend mt-2">
                 <span><span class="legend-box" style="background:#86efac;"></span>空闲(&lt;20%)</span>
                 <span><span class="legend-box" style="background:#fbbf24;"></span>中等</span>
                 <span><span class="legend-box" style="background:#ef4444;"></span>高占用(≥70%)</span>
-                <span><span class="legend-box" style="background:#6b7280;"></span>故障/无数据</span>
+                <span><span class="legend-box" style="background:#6b7280;"></span>故障</span>
                 <span><span class="legend-box" style="background:#e5e7eb;"></span>无数据</span>
             </div>
             {% else %}
@@ -297,5 +338,28 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function toggleMachine(cid, toggleEl) {
+    const expanded = toggleEl.classList.toggle('expanded');
+    document.querySelectorAll(`.gpu-detail[data-parent="${cid}"]`).forEach(el => {
+        el.classList.toggle('expanded', expanded);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const btn = document.getElementById('expand-all');
+    if (!btn) return;
+    let allExpanded = false;
+    btn.addEventListener('click', function() {
+        allExpanded = !allExpanded;
+        document.querySelectorAll('.machine-toggle').forEach(t => {
+            t.classList.toggle('expanded', allExpanded);
+        });
+        document.querySelectorAll('.gpu-detail').forEach(el => {
+            el.classList.toggle('expanded', allExpanded);
+        });
+    });
+});
+</script>
 </body>
 </html>

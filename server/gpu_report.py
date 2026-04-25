@@ -483,71 +483,135 @@ def get_idle_gpus():
     return idle
 
 
+def _classify_cell(vram_avg, low_t, high_t):
+    if vram_avg < low_t:
+        return 'low'
+    if vram_avg < high_t:
+        return 'mid'
+    return 'high'
+
+
 def get_heatmap_data(days=7):
+    """Returns machine → GPUs hierarchy with per-machine rollup row.
+
+    Machine rollup = max(vram_avg) across that machine's GPUs in each hour.
+    If any GPU shows error (ok=0, err>0) for an hour, rollup is 'error'.
+    Default UX: machines collapsed, click to expand per-GPU rows.
+    """
     now = datetime.now()
     hour_end   = now.replace(minute=0, second=0, microsecond=0)
     hour_start = hour_end - timedelta(hours=days * 24)
 
-    rows = (db.session.query(GpuHourlyUsage, Client.hostname, Client.display_order)
+    rows = (db.session.query(GpuHourlyUsage, Client.hostname,
+                              Client.display_name, Client.display_order)
             .join(Client, GpuHourlyUsage.client_id == Client.id)
             .filter(GpuHourlyUsage.hour >= hour_start)
             .filter(GpuHourlyUsage.hour < hour_end)
             .all())
 
-    grouped: dict = {}
-    for usage, hostname, display_order in rows:
-        key = (display_order, usage.client_id, usage.gpu_index)
-        bucket = grouped.setdefault(key, {
-            'client_id': usage.client_id,
-            'hostname': hostname,
-            'display_order': display_order,
-            'gpu_index': usage.gpu_index,
-            'gpu_name': usage.gpu_name,
-            'cells_by_hour': {},
-        })
-        bucket['gpu_name'] = usage.gpu_name
-        bucket['cells_by_hour'][usage.hour] = usage
+    # Group by (client, gpu) for per-card cells
+    per_gpu: dict = {}
+    machine_meta: dict = {}
+    for usage, hostname, display_name, display_order in rows:
+        key = (usage.client_id, usage.gpu_index)
+        bucket = per_gpu.setdefault(key, {})
+        bucket[usage.hour] = usage
+        if usage.client_id not in machine_meta:
+            machine_meta[usage.client_id] = {
+                'hostname': hostname,
+                'display_name': display_name or hostname,
+                'display_order': display_order,
+            }
 
     hours = [hour_start + timedelta(hours=i) for i in range(days * 24)]
     cfg = _get_cfg()
     low_t  = cfg['heatmap_low_threshold']
     high_t = cfg['heatmap_high_threshold']
 
-    result = []
-    for key in sorted(grouped):
-        bucket = grouped[key]
-        cells = []
-        for h in hours:
-            u = bucket['cells_by_hour'].get(h)
-            if u is None:
-                cells.append({'hour': h.isoformat(), 'status': 'nodata',
-                              'vram_avg': None, 'util_avg': None,
-                              'ok': 0, 'err': 0})
-            elif (u.ok_sample_count or 0) == 0:
-                cells.append({'hour': h.isoformat(), 'status': 'error',
-                              'vram_avg': None, 'util_avg': None,
-                              'ok': 0, 'err': u.error_count or 0})
-            else:
-                v = round(u.vram_pct_avg, 1)
-                if v < low_t:
-                    st = 'low'
-                elif v < high_t:
-                    st = 'mid'
-                else:
-                    st = 'high'
-                cells.append({'hour': h.isoformat(), 'status': st,
-                              'vram_avg': v, 'util_avg': round(u.util_pct_avg, 1),
-                              'vram_peak': round(u.vram_pct_peak, 1),
-                              'ok': u.ok_sample_count or 0,
-                              'err': u.error_count or 0})
-        result.append({
-            'hostname': bucket['hostname'],
-            'gpu_index': bucket['gpu_index'],
-            'gpu_name': bucket['gpu_name'],
-            'cells': cells,
+    def _gpu_cell(usage, h):
+        if usage is None:
+            return {'hour': h.isoformat(), 'status': 'nodata',
+                    'vram_avg': None, 'util_avg': None, 'ok': 0, 'err': 0}
+        if (usage.ok_sample_count or 0) == 0:
+            return {'hour': h.isoformat(), 'status': 'error',
+                    'vram_avg': None, 'util_avg': None,
+                    'ok': 0, 'err': usage.error_count or 0}
+        v = round(usage.vram_pct_avg, 1)
+        return {'hour': h.isoformat(),
+                'status': _classify_cell(v, low_t, high_t),
+                'vram_avg': v, 'util_avg': round(usage.util_pct_avg, 1),
+                'vram_peak': round(usage.vram_pct_peak, 1),
+                'ok': usage.ok_sample_count or 0,
+                'err': usage.error_count or 0}
+
+    # Build per-machine structure
+    machines_dict: dict = {}
+    for (cid, gidx), cells_by_hour in per_gpu.items():
+        meta = machine_meta[cid]
+        m = machines_dict.setdefault(cid, {
+            'client_id': cid,
+            'hostname': meta['hostname'],
+            'display_name': meta['display_name'],
+            'display_order': meta['display_order'],
+            'gpus': {},
         })
-    return {'hour_start': hour_start.isoformat(), 'hour_end': hour_end.isoformat(),
-            'hours': days * 24, 'rows': result}
+        latest_name = next(
+            (cells_by_hour[h].gpu_name for h in sorted(cells_by_hour, reverse=True)
+             if cells_by_hour[h].gpu_name),
+            f'GPU {gidx}',
+        )
+        m['gpus'][gidx] = {
+            'gpu_index': gidx,
+            'gpu_name': latest_name,
+            'cells': [_gpu_cell(cells_by_hour.get(h), h) for h in hours],
+        }
+
+    # Per-machine rollup row: max of each gpu's cell.vram_avg per hour
+    machines = []
+    for cid, m in machines_dict.items():
+        gpus_sorted = [m['gpus'][gidx] for gidx in sorted(m['gpus'])]
+        rollup_cells = []
+        for hi, h in enumerate(hours):
+            gpu_cells_at_h = [g['cells'][hi] for g in gpus_sorted]
+            vram_vals = [c['vram_avg'] for c in gpu_cells_at_h if c['vram_avg'] is not None]
+            err_vals  = [c['err']      for c in gpu_cells_at_h if c['err']]
+            if vram_vals:
+                v = max(vram_vals)
+                rollup_cells.append({
+                    'hour': h.isoformat(),
+                    'status': _classify_cell(v, low_t, high_t),
+                    'vram_avg': v,
+                    'gpus_observed': len(gpu_cells_at_h),
+                    'err_total': sum(err_vals),
+                })
+            elif err_vals:
+                rollup_cells.append({
+                    'hour': h.isoformat(), 'status': 'error',
+                    'vram_avg': None, 'gpus_observed': len(gpu_cells_at_h),
+                    'err_total': sum(err_vals),
+                })
+            else:
+                rollup_cells.append({
+                    'hour': h.isoformat(), 'status': 'nodata',
+                    'vram_avg': None, 'gpus_observed': len(gpu_cells_at_h),
+                    'err_total': 0,
+                })
+
+        machines.append({
+            'client_id': cid,
+            'hostname': m['hostname'],
+            'display_name': m['display_name'],
+            'gpu_count': len(gpus_sorted),
+            'rollup_cells': rollup_cells,
+            'gpus': gpus_sorted,
+        })
+
+    machines.sort(key=lambda m: machine_meta[m['client_id']]['display_order'])
+
+    return {'hour_start': hour_start.isoformat(),
+            'hour_end': hour_end.isoformat(),
+            'hours': days * 24,
+            'machines': machines}
 
 
 def get_longterm_idle():
