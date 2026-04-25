@@ -3,221 +3,508 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPU 使用报告 - Omni-Server-Status</title>
+    <title>GPU 使用报告 · Omni-Server-Status</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f8f9fa; }
-        .navbar { margin-bottom: 25px; box-shadow: 0 2px 10px rgba(0,0,0,.1); }
-        .card {
-            border-radius: 12px;
-            box-shadow: 0 4px 8px rgba(0,0,0,.1);
-            border: none;
+        /* ─── Apple-inspired design tokens ──────────────────────────── */
+        :root {
+            --bg-page: #F5F5F7;
+            --bg-card: #FFFFFF;
+            --bg-subtle: #F9F9FB;
+            --bg-hover: rgba(0,0,0,0.025);
+
+            --text-primary:   #1D1D1F;
+            --text-secondary: #6E6E73;
+            --text-tertiary:  #86868B;
+            --text-quaternary:#C7C7CC;
+
+            --separator:        rgba(60, 60, 67, 0.10);
+            --separator-strong: rgba(60, 60, 67, 0.18);
+
+            --accent:           #0071E3;
+            --accent-hover:     #0077ED;
+            --accent-bg:        rgba(0, 113, 227, 0.08);
+
+            --status-low:    #34C759;
+            --status-low-bg: #E5F8E9;
+            --status-mid:    #FF9500;
+            --status-mid-bg: #FFF1DD;
+            --status-high:   #FF3B30;
+            --status-high-bg:#FFE5E2;
+            --status-error:  #8E8E93;
+            --status-nodata: #F2F2F7;
+
+            --shadow-sm: 0 0 0 1px rgba(60,60,67,0.06);
+            --shadow-md: 0 1px 3px rgba(0,0,0,0.04), 0 0 0 1px rgba(60,60,67,0.06);
+            --shadow-hover: 0 4px 12px rgba(0,0,0,0.06), 0 0 0 1px rgba(60,60,67,0.08);
+
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+            --radius-xl: 18px;
+
+            --ease: cubic-bezier(0.4, 0.0, 0.2, 1);
+        }
+
+        * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+        html, body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                         "SF Pro Text", "Segoe UI", Helvetica, "PingFang SC",
+                         "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            font-feature-settings: "tnum" 1, "ss01" 1;
+            background: var(--bg-page);
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+
+        /* Navbar — minimal frosted style */
+        .top-bar {
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid var(--separator);
+            padding: 14px 24px;
+            position: sticky; top: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .top-bar .brand {
+            font-size: 15px; font-weight: 600; color: var(--text-primary);
+            text-decoration: none; letter-spacing: -0.02em;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .top-bar .brand:hover { color: var(--accent); }
+        .top-bar .nav-actions { display: flex; gap: 8px; }
+        .top-bar .nav-link {
+            font-size: 13px; color: var(--text-secondary); text-decoration: none;
+            padding: 6px 12px; border-radius: 6px;
+            transition: all 0.15s var(--ease);
+        }
+        .top-bar .nav-link:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+        /* Page container */
+        .page {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 32px 24px 64px;
+        }
+
+        /* Page title */
+        .page-title {
+            font-size: 32px; font-weight: 700; letter-spacing: -0.03em;
+            margin: 0 0 4px 0;
+        }
+        .page-eyebrow {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--text-tertiary); font-weight: 500;
+            margin-bottom: 6px;
+        }
+        .page-subtitle {
+            color: var(--text-secondary); font-size: 14px; margin: 0 0 32px;
+        }
+
+        /* Card primitive */
+        .panel {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 18px 22px 12px;
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 12px;
+        }
+        .panel-eyebrow {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+            color: var(--text-tertiary); font-weight: 600; margin-bottom: 2px;
+        }
+        .panel-title {
+            font-size: 18px; font-weight: 600; letter-spacing: -0.02em;
+            color: var(--text-primary); margin: 0;
+        }
+        .panel-action {
+            font-size: 12px; color: var(--accent); cursor: pointer;
+            background: none; border: none; padding: 6px 10px; border-radius: 6px;
+            transition: background 0.15s var(--ease);
+        }
+        .panel-action:hover { background: var(--accent-bg); }
+        .panel-body { padding: 4px 22px 22px; }
+        .panel-body.flush { padding: 0 0 0 0; }
+
+        /* Summary tiles (Apple Health style) */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
             margin-bottom: 20px;
         }
-        .card-header {
-            border-radius: 12px 12px 0 0 !important;
-            background-color: #fff;
-            border-bottom: 1px solid rgba(0,0,0,.05);
-            padding: 15px 20px;
+        @media (max-width: 768px) {
+            .summary-grid { grid-template-columns: repeat(2, 1fr); }
         }
-        .card-body { padding: 20px; }
-        .summary-stat {
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 12px;
+        .summary-tile {
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-sm);
+            padding: 16px 18px;
+            transition: box-shadow 0.2s var(--ease);
+        }
+        .summary-tile:hover { box-shadow: var(--shadow-hover); }
+        .summary-tile .label {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--text-tertiary); font-weight: 600; margin-bottom: 6px;
+        }
+        .summary-tile .value {
+            font-size: 30px; font-weight: 600; letter-spacing: -0.03em;
+            color: var(--text-primary); line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
+        .summary-tile .value .total {
+            font-size: 14px; color: var(--text-tertiary); font-weight: 400;
+            margin-left: 2px;
+        }
+        .summary-tile.accent-positive .value { color: var(--status-low); }
+        .summary-tile.accent-negative .value { color: var(--status-high); }
+
+        /* AI summary card — prose-friendly */
+        .ai-summary { padding: 22px 24px; }
+        .ai-summary-content {
+            font-size: 14px; line-height: 1.7; color: var(--text-primary);
+        }
+        .ai-summary-content :first-child { margin-top: 0; }
+        .ai-summary-content :last-child { margin-bottom: 0; }
+        .ai-summary-content h2 { font-size: 16px; font-weight: 600; margin: 16px 0 8px; }
+        .ai-summary-content strong { font-weight: 600; }
+        .ai-summary-content code {
+            background: var(--bg-subtle); padding: 1px 5px; border-radius: 4px;
+            font-size: 12px; color: var(--text-primary);
+        }
+        .ai-summary-meta {
+            font-size: 11px; color: var(--text-tertiary); margin-top: 14px;
+            padding-top: 12px; border-top: 1px solid var(--separator);
+        }
+        .ai-summary-empty, .ai-summary-error {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 16px; border-radius: var(--radius-md);
+            font-size: 13px;
+        }
+        .ai-summary-empty { background: var(--bg-subtle); color: var(--text-secondary); }
+        .ai-summary-error { background: var(--status-mid-bg); color: #8B5A00; }
+
+        /* History collapse */
+        .history-section { padding: 0 22px 22px; border-top: 1px solid var(--separator); }
+        .history-section .history-item {
+            padding: 14px 0; border-bottom: 1px solid var(--separator);
+        }
+        .history-section .history-item:last-child { border-bottom: none; }
+        .history-section .history-time {
+            font-size: 11px; color: var(--text-tertiary);
+            text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
+        }
+
+        /* Idle GPU pills */
+        .idle-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 10px;
+        }
+        .idle-tile {
+            background: var(--bg-subtle);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            border: 1px solid var(--separator);
+            transition: all 0.15s var(--ease);
+        }
+        .idle-tile:hover {
+            background: var(--status-low-bg);
+            border-color: var(--status-low);
+        }
+        .idle-tile .name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+        .idle-tile .gpu  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+        .idle-tile .duration {
+            font-size: 11px; color: var(--status-low); margin-top: 4px; font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Empty state */
+        .empty-state {
+            color: var(--text-tertiary); font-size: 13px; padding: 24px 0;
             text-align: center;
         }
-        .summary-stat .num { font-size: 1.8rem; font-weight: 600; }
-        /* ─── Heatmap (status-page style: 7 daily bars + sparkline) ─── */
-        .hm-container { display: flex; flex-direction: column; gap: 4px; }
-        .hm-axis-row {
+
+        /* ─── Heatmap (status-page style refined) ──────────────────── */
+        .hm-container { display: flex; flex-direction: column; gap: 1px; }
+
+        .hm-axis-row, .hm-machine, .hm-gpu {
             display: grid;
-            grid-template-columns: 220px repeat(7, 1fr) 100px;
-            gap: 6px;
-            font-size: 10px;
-            color: #9ca3af;
-            padding: 0 4px;
+            grid-template-columns: 200px repeat(7, 1fr) 96px;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .hm-axis-row {
+            font-size: 10px; color: var(--text-tertiary);
+            padding: 8px 4px 12px;
+            border-bottom: 1px solid var(--separator);
+            margin-bottom: 6px;
         }
         .hm-axis-day {
             text-align: center;
             display: flex; flex-direction: column; align-items: center;
             line-height: 1.2;
+            font-feature-settings: "tnum";
         }
-        .hm-axis-day.is-today { color: #2563eb; font-weight: 600; }
-        .hm-axis-day .wd { font-size: 11px; }
-        .hm-axis-day .dt { font-size: 9px; opacity: 0.8; }
-        .hm-axis-spark { text-align: right; font-size: 9px; color: #9ca3af; }
+        .hm-axis-day .wd {
+            font-size: 11px; color: var(--text-secondary); font-weight: 500;
+        }
+        .hm-axis-day .dt { font-size: 10px; opacity: 0.7; margin-top: 2px; }
+        .hm-axis-day.is-today .wd { color: var(--accent); font-weight: 600; }
+        .hm-axis-day.is-today .dt { color: var(--accent); opacity: 1; }
+        .hm-axis-spark {
+            text-align: right; font-size: 9px; color: var(--text-tertiary);
+            text-transform: uppercase; letter-spacing: 0.06em;
+        }
 
-        .hm-machine, .hm-gpu {
-            display: grid;
-            grid-template-columns: 220px repeat(7, 1fr) 100px;
-            gap: 6px;
-            align-items: center;
+        .hm-machine {
+            padding: 8px 4px;
+            border-radius: var(--radius-md);
+            transition: background 0.15s var(--ease);
         }
-        .hm-machine { padding: 4px 4px; border-radius: 4px; transition: background 0.15s; }
-        .hm-machine:hover { background: #f9fafb; }
-        .hm-gpu { padding: 2px 4px; }
+        .hm-machine:hover { background: var(--bg-hover); }
+        .hm-gpu { padding: 4px 4px; }
 
         .hm-label {
-            display: flex; align-items: center; gap: 4px;
-            font-size: 12px; color: #1f2937; font-weight: 500;
+            display: flex; align-items: center; gap: 6px;
+            font-size: 13px; color: var(--text-primary); font-weight: 500;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             user-select: none;
+            letter-spacing: -0.01em;
         }
         .hm-label.machine { cursor: pointer; }
-        .hm-label.machine:hover { color: #2563eb; }
-        .hm-label .chevron { color: #9ca3af; transition: transform 0.15s; flex-shrink: 0; }
+        .hm-label.machine:hover { color: var(--accent); }
+        .hm-label .chevron {
+            color: var(--text-tertiary); transition: transform 0.2s var(--ease);
+            flex-shrink: 0; font-size: 12px;
+        }
         .hm-label.expanded .chevron { transform: rotate(90deg); }
-        .hm-label .meta { color: #9ca3af; font-size: 10px; font-weight: normal; }
+        .hm-label .meta {
+            color: var(--text-tertiary); font-size: 11px; font-weight: 400;
+            margin-left: auto; padding-left: 6px;
+        }
 
         .hm-gpu-label {
-            font-size: 11px; color: #6b7280; padding-left: 24px;
+            font-size: 12px; color: var(--text-secondary);
+            padding-left: 26px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            font-feature-settings: "tnum";
         }
 
-        /* Daily cells: large enough to read percentage inside */
+        /* Daily cells — refined Apple-style */
         .hm-day {
-            height: 32px;
-            border-radius: 4px;
+            height: 36px;
+            border-radius: var(--radius-sm);
             display: flex; align-items: center; justify-content: center;
-            font-size: 11px; font-weight: 500;
-            color: rgba(0,0,0,0.55);
+            font-size: 12px; font-weight: 500;
+            font-variant-numeric: tabular-nums;
             cursor: default;
-            transition: transform 0.1s;
+            transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
             user-select: none;
+            position: relative;
         }
-        .hm-day:hover { transform: scale(1.05); z-index: 2; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
-        .hm-day.gpu { height: 18px; font-size: 9px; border-radius: 3px; }
-
-        .hm-nodata { background: #f1f5f9; color: #94a3b8; }
-        .hm-low    { background: #86efac; }
-        .hm-mid    { background: #fbbf24; }
-        .hm-high   { background: #ef4444; color: rgba(255,255,255,0.92); }
-        .hm-error  { background: #6b7280; color: #fff; }
-
-        /* Sparkline column: SVG min-trend over 168 hours */
-        .hm-sparkline {
-            height: 32px;
-            display: block;
+        .hm-day:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+            z-index: 2;
         }
-        .hm-sparkline.gpu { height: 18px; }
+        .hm-day.gpu { height: 22px; font-size: 10px; border-radius: 4px; }
+
+        .hm-low    { background: var(--status-low-bg); color: #1A6A2C; }
+        .hm-mid    { background: var(--status-mid-bg); color: #8B5A00; }
+        .hm-high   { background: var(--status-high-bg); color: #A4231A; }
+        .hm-error  { background: var(--status-error); color: #fff; }
+        .hm-nodata { background: var(--status-nodata); color: var(--text-quaternary); }
+
+        /* Sparkline */
+        .hm-sparkline { height: 36px; display: block; width: 100%; }
+        .hm-sparkline.gpu { height: 22px; }
+        .hm-sparkline path {
+            fill: none;
+            stroke: var(--text-tertiary);
+            stroke-width: 1;
+            stroke-linejoin: round;
+            stroke-linecap: round;
+        }
+        .hm-machine:hover .hm-sparkline path { stroke: var(--accent); }
+
+        .hm-gpu-section {
+            display: none;
+            padding: 4px 0 8px;
+            margin-left: 14px;
+            border-left: 1px solid var(--separator);
+        }
+        .hm-gpu-section.expanded { display: flex; flex-direction: column; gap: 2px; }
 
         /* Legend */
-        .heatmap-legend { display: flex; gap: 14px; font-size: 11px; color: #6b7280; margin-top: 14px; flex-wrap: wrap; }
-        .legend-box { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; margin-right: 4px; }
-
-        /* Per-GPU expanded rows (default hidden) */
-        .hm-gpu-section { display: none; margin-top: 4px; padding-left: 0; }
-        .hm-gpu-section.expanded { display: flex; flex-direction: column; gap: 2px; }
-        .idle-card {
-            border: 1px solid #bbf7d0;
-            background: #f0fdf4;
-            border-radius: 8px;
-            padding: 10px 14px;
-            font-size: 13px;
+        .hm-legend {
+            display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+            font-size: 11px; color: var(--text-secondary);
+            padding-top: 14px; margin-top: 14px;
+            border-top: 1px solid var(--separator);
         }
-        .error-gpu-row { background: #fef2f2; }
+        .hm-legend .swatch {
+            display: inline-block; width: 11px; height: 11px;
+            border-radius: 3px; vertical-align: -1px; margin-right: 5px;
+        }
+
+        /* Tables — clean Apple-style */
+        .data-table {
+            width: 100%; border-collapse: collapse;
+            font-size: 13px; font-variant-numeric: tabular-nums;
+        }
+        .data-table thead th {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--text-tertiary); font-weight: 600;
+            padding: 10px 16px; text-align: left;
+            border-bottom: 1px solid var(--separator);
+            background: var(--bg-subtle);
+        }
+        .data-table thead th.num { text-align: right; }
+        .data-table tbody td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--separator);
+            color: var(--text-primary);
+        }
+        .data-table tbody td.num { text-align: right; }
+        .data-table tbody td.muted { color: var(--text-secondary); }
+        .data-table tbody tr:hover { background: var(--bg-hover); }
+        .data-table tbody tr:last-child td { border-bottom: none; }
+
+        .badge-warn {
+            display: inline-block; padding: 2px 8px;
+            border-radius: 4px; background: var(--status-mid-bg);
+            color: #8B5A00; font-size: 11px; font-weight: 500;
+        }
+        .badge-error {
+            display: inline-block; padding: 2px 8px;
+            border-radius: 4px; background: var(--status-high-bg);
+            color: #A4231A; font-size: 11px; font-weight: 500;
+        }
+
+        .table-note {
+            font-size: 12px; color: var(--text-secondary);
+            padding: 12px 22px 0; line-height: 1.5;
+        }
+
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+        /* Flash messages */
+        .flash {
+            padding: 12px 16px; border-radius: var(--radius-md);
+            margin-bottom: 16px; font-size: 13px;
+        }
+        .flash-success { background: var(--status-low-bg); color: #1A6A2C; }
+        .flash-danger  { background: var(--status-high-bg); color: #A4231A; }
+        .flash-warning { background: var(--status-mid-bg); color: #8B5A00; }
+        .flash-info    { background: var(--accent-bg); color: var(--accent); }
     </style>
 </head>
 <body>
-<nav class="navbar navbar-dark bg-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="/">
-            <i class="bi bi-pc-display"></i> Omni-Server-Status
+<nav class="top-bar">
+    <a class="brand" href="/">
+        <i class="bi bi-cpu" style="font-size: 18px; color: var(--accent);"></i>
+        Omni-Server-Status
+    </a>
+    <div class="nav-actions">
+        <a href="{{ url_for('dashboard') }}" class="nav-link">
+            <i class="bi bi-arrow-left"></i> 返回仪表盘
         </a>
-        <div class="d-flex">
-            <a href="{{ url_for('dashboard') }}" class="btn btn-sm btn-outline-light me-2">
-                <i class="bi bi-arrow-left"></i> 返回仪表盘
-            </a>
-            <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-light">
-                <i class="bi bi-box-arrow-right"></i> 登出
-            </a>
-        </div>
+        <a href="{{ url_for('logout') }}" class="nav-link">登出</a>
     </div>
 </nav>
 
-<div class="container-fluid px-4">
-    <h2 class="mb-4"><i class="bi bi-bar-chart-line"></i> GPU 使用报告</h2>
+<div class="page">
+    <div class="page-eyebrow">Reports</div>
+    <h1 class="page-title">GPU 使用报告</h1>
+    <p class="page-subtitle">过去 7 天每小时聚合 · 仅管理员可见</p>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}{% for cat, msg in messages %}
-        <div class="alert alert-{{ cat }}">{{ msg }}</div>
+        <div class="flash flash-{{ cat }}">{{ msg }}</div>
       {% endfor %}{% endif %}
     {% endwith %}
 
-    <!-- 顶部摘要 -->
-    <div class="row mb-4">
-        <div class="col-6 col-md-3 mb-2">
-            <div class="summary-stat">
-                <div class="small text-muted">在线客户端</div>
-                <div class="num text-success">{{ summary_stats.online_clients }}<span class="fs-6 text-muted"> / {{ summary_stats.total_clients }}</span></div>
-            </div>
+    <!-- Summary tiles -->
+    <div class="summary-grid">
+        <div class="summary-tile">
+            <div class="label">在线客户端</div>
+            <div class="value">{{ summary_stats.online_clients }}<span class="total"> / {{ summary_stats.total_clients }}</span></div>
         </div>
-        <div class="col-6 col-md-3 mb-2">
-            <div class="summary-stat">
-                <div class="small text-muted">GPU 总数</div>
-                <div class="num">{{ summary_stats.total_gpus }}</div>
-            </div>
+        <div class="summary-tile">
+            <div class="label">GPU 总数</div>
+            <div class="value">{{ summary_stats.total_gpus }}</div>
         </div>
-        <div class="col-6 col-md-3 mb-2">
-            <div class="summary-stat" style="background:#f0fdf4;border-color:#bbf7d0;">
-                <div class="small text-muted">当前空闲</div>
-                <div class="num text-success">{{ summary_stats.idle_count }}</div>
-            </div>
+        <div class="summary-tile {% if summary_stats.idle_count > 0 %}accent-positive{% endif %}">
+            <div class="label">当前空闲</div>
+            <div class="value">{{ summary_stats.idle_count }}</div>
         </div>
-        <div class="col-6 col-md-3 mb-2">
-            <div class="summary-stat {% if summary_stats.error_gpu_count > 0 %}{% set _='s' %}{% endif %}" style="{% if summary_stats.error_gpu_count > 0 %}background:#fef2f2;border-color:#fecaca;{% endif %}">
-                <div class="small text-muted">本周异常 GPU</div>
-                <div class="num {% if summary_stats.error_gpu_count > 0 %}text-danger{% endif %}">{{ summary_stats.error_gpu_count }}</div>
-            </div>
+        <div class="summary-tile {% if summary_stats.error_gpu_count > 0 %}accent-negative{% endif %}">
+            <div class="label">本周异常</div>
+            <div class="value">{{ summary_stats.error_gpu_count }}</div>
         </div>
     </div>
 
-    <!-- AI 摘要 -->
-    <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="mb-0"><i class="bi bi-robot"></i> 本周 AI 摘要</h5>
+    <!-- AI Summary -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">Weekly Brief</div>
+                <h2 class="panel-title">本周 AI 摘要</h2>
+            </div>
             {% if history %}
-            <a class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" href="#summary-history">
+            <button class="panel-action" data-bs-toggle="collapse" data-bs-target="#summary-history">
                 查看历史
-            </a>
+            </button>
             {% endif %}
         </div>
-        <div class="card-body">
-            {# |safe is OK here: latest_summary_html was sanitized by render_markdown_safe() (bleach.clean) #}
+        <div class="ai-summary">
             {% if latest_summary_html %}
-                {{ latest_summary_html|safe }}
-                <small class="text-muted d-block mt-2">
+                {# |safe is OK here: latest_summary_html was sanitized by render_markdown_safe() (bleach.clean) #}
+                <div class="ai-summary-content">{{ latest_summary_html|safe }}</div>
+                <div class="ai-summary-meta">
                     生成于 {{ latest_summary.generated_at.strftime('%Y-%m-%d %H:%M') }}
-                    · 模型 {{ latest_summary.model }}
-                    {% if latest_summary.input_tokens %}· {{ latest_summary.input_tokens }}in/{{ latest_summary.output_tokens }}out tokens{% endif %}
-                </small>
+                    · {{ latest_summary.model }}
+                    {% if latest_summary.input_tokens %}
+                    · {{ latest_summary.input_tokens }}in / {{ latest_summary.output_tokens }}out tokens
+                    {% endif %}
+                </div>
             {% elif latest_summary and latest_summary.status == 'error' %}
-                <div class="alert alert-warning mb-0">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    上次摘要生成失败 ({{ latest_summary.generated_at.strftime('%m-%d %H:%M') }}),详情见服务器日志。下次运行:下周一 09:00。
+                <div class="ai-summary-error">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <span>上次摘要生成失败 ({{ latest_summary.generated_at.strftime('%m-%d %H:%M') }}),详情见服务器日志。下次运行:下周一 09:00。</span>
                 </div>
             {% else %}
-                <div class="alert alert-info mb-0">
-                    <i class="bi bi-info-circle"></i>
-                    尚未生成摘要。下次生成:下周一 09:00。
-                    {% if not config.get('ANTHROPIC_API_KEY') %}<br><small>提示:未检测到 <code>ANTHROPIC_API_KEY</code> 环境变量。</small>{% endif %}
+                <div class="ai-summary-empty">
+                    <i class="bi bi-clock-history"></i>
+                    <span>尚未生成摘要 · 下次运行:下周一 09:00</span>
                 </div>
             {% endif %}
         </div>
         {% if history %}
         <div class="collapse" id="summary-history">
-            <div class="card-body border-top">
-                <h6 class="text-muted mb-3">历史摘要(最近 {{ history|length }} 条)</h6>
+            <div class="history-section">
                 {% for item in history %}
-                <div class="mb-3 pb-3 border-bottom">
-                    <small class="text-muted">{{ item.generated_at.strftime('%Y-%m-%d %H:%M') }}</small>
-                    {# |safe is OK here: item.html was sanitized by render_markdown_safe() (bleach.clean) #}
+                <div class="history-item">
+                    <div class="history-time">{{ item.generated_at.strftime('%Y-%m-%d %H:%M') }}</div>
                     {% if item.html %}
-                        {{ item.html|safe }}
+                        {# |safe is OK here: item.html was sanitized by render_markdown_safe() (bleach.clean) #}
+                        <div class="ai-summary-content">{{ item.html|safe }}</div>
                     {% else %}
-                        <div class="text-danger small">生成失败: {{ item.error }}</div>
+                        <div class="ai-summary-error">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <span>生成失败:{{ item.error }}</span>
+                        </div>
                     {% endif %}
                 </div>
                 {% endfor %}
@@ -226,71 +513,70 @@
         {% endif %}
     </div>
 
-    <!-- ① 当前空闲 GPU -->
-    <div class="card mb-4">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-check-circle text-success"></i> ① 当前空闲 GPU(可调度)</h5>
+    <!-- ① Currently idle -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">Available Now</div>
+                <h2 class="panel-title">当前空闲 GPU</h2>
+            </div>
         </div>
-        <div class="card-body">
+        <div class="panel-body">
             {% if idle_gpus %}
-            <div class="row g-2">
+            <div class="idle-grid">
                 {% for g in idle_gpus %}
-                <div class="col-md-4 col-lg-3">
-                    <div class="idle-card">
-                        <div><b>{{ g.display_name }}</b> · GPU {{ g.gpu_index }}</div>
-                        <div class="text-muted">{{ g.gpu_name }} · VRAM {{ g.vram_pct }}%</div>
-                        <div class="text-success" style="font-size:11px;">
-                            已空闲 {% if g.idle_minutes >= 60 %}{{ (g.idle_minutes // 60)|int }}h {{ (g.idle_minutes % 60)|int }}m{% else %}{{ g.idle_minutes }}m{% endif %}
-                        </div>
+                <div class="idle-tile">
+                    <div class="name">{{ g.display_name }} · GPU {{ g.gpu_index }}</div>
+                    <div class="gpu">{{ g.gpu_name }} · VRAM {{ g.vram_pct }}%</div>
+                    <div class="duration">
+                        已空闲 {% if g.idle_minutes >= 60 %}{{ (g.idle_minutes // 60)|int }}h {{ (g.idle_minutes % 60)|int }}m{% else %}{{ g.idle_minutes }}m{% endif %}
                     </div>
                 </div>
                 {% endfor %}
             </div>
             {% else %}
-            <div class="text-muted">当前无空闲 GPU</div>
+            <div class="empty-state">当前无空闲 GPU</div>
             {% endif %}
         </div>
     </div>
 
-    <!-- ② 7 天热力图 -->
-    <div class="card mb-4">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-grid-3x3"></i> ② 7 天 VRAM 占用热力图</h5>
-        </div>
-        <div class="card-body" style="overflow-x:auto;">
+    <!-- ② Heatmap -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">Weekly Utilization</div>
+                <h2 class="panel-title">7 天 VRAM 占用</h2>
+            </div>
             {% if heatmap.machines %}
-            {% macro spark_path(values, width=96, height=28) %}
+            <button id="expand-all" class="panel-action">全部展开</button>
+            {% endif %}
+        </div>
+        <div class="panel-body">
+            {% if heatmap.machines %}
+            {% macro spark_path(values, width=88, height=32) %}
               {% set non_null = values|select|list %}
               {% if non_null %}
-                {% set vmin = 0 %}
-                {% set vmax = 100 %}
                 {% set step = (width - 2) / (values|length - 1) if values|length > 1 else width %}
-                {% set ns = namespace(d='', last_x=None) %}
+                {% set ns = namespace(d='') %}
                 {% for v in values %}
                   {% set x = 1 + loop.index0 * step %}
                   {% if v is not none %}
-                    {% set y = (height - 2) - ((v - vmin) / (vmax - vmin)) * (height - 4) %}
+                    {% set y = (height - 2) - (v / 100) * (height - 4) %}
                     {% if ns.d == '' %}
                       {% set ns.d = 'M' ~ ('%.1f' % x) ~ ',' ~ ('%.1f' % y) %}
                     {% else %}
                       {% set ns.d = ns.d ~ ' L' ~ ('%.1f' % x) ~ ',' ~ ('%.1f' % y) %}
                     {% endif %}
-                    {% set ns.last_x = x %}
                   {% endif %}
                 {% endfor %}
                 <svg class="hm-sparkline" viewBox="0 0 {{ width }} {{ height }}" preserveAspectRatio="none">
-                  <path d="{{ ns.d }}" fill="none" stroke="#94a3b8" stroke-width="1.2" />
+                  <path d="{{ ns.d }}" />
                 </svg>
               {% endif %}
             {% endmacro %}
 
-            <div class="d-flex justify-content-between align-items-center mb-3 px-1" style="font-size:12px;color:#6b7280;">
-                <span>共 <b>{{ heatmap.machines|length }}</b> 台机器 · 7 天每日最高 VRAM 占用 · 点击机器名展开查看每张 GPU</span>
-                <button id="expand-all" class="btn btn-sm btn-outline-secondary" style="font-size:11px;">全部展开 / 折叠</button>
-            </div>
-
             <div class="hm-container">
-                <!-- Axis row: day labels -->
+                <!-- Axis row -->
                 <div class="hm-axis-row">
                     <div></div>
                     {% for d in heatmap.day_labels %}
@@ -299,11 +585,10 @@
                         <span class="dt">{{ d.day }}</span>
                     </div>
                     {% endfor %}
-                    <div class="hm-axis-spark">24h 趋势 →</div>
+                    <div class="hm-axis-spark">168 H</div>
                 </div>
 
                 {% for m in heatmap.machines %}
-                <!-- Machine roll-up row -->
                 <div class="hm-machine" data-machine-id="{{ m.client_id }}">
                     <div class="hm-label machine" onclick="toggleMachine('{{ m.client_id }}', this)">
                         <i class="bi bi-chevron-right chevron"></i>
@@ -312,38 +597,33 @@
                     </div>
                     {% for cell in m.days %}
                     <div class="hm-day hm-{{ cell.status }}"
-                         title="{% if cell.vram_max is not none %}{{ cell.weekday }} {{ cell.day }} | 全机最高 VRAM: {{ cell.vram_max }}% | 平均: {{ cell.vram_avg }}%{% if cell.err_total %} | 错误样本: {{ cell.err_total }}{% endif %}{% else %}{{ cell.weekday }} {{ cell.day }} | 无数据{% if cell.err_total %} | {{ cell.err_total }} 错误{% endif %}{% endif %}">
+                         title="{% if cell.vram_max is not none %}周{{ cell.weekday }} {{ cell.day }} · 最高 VRAM {{ cell.vram_max }}% · 平均 {{ cell.vram_avg }}%{% if cell.err_total %} · 错误 {{ cell.err_total }}{% endif %}{% else %}周{{ cell.weekday }} {{ cell.day }} · 无数据{% if cell.err_total %} · 错误 {{ cell.err_total }}{% endif %}{% endif %}">
                         {% if cell.vram_max is not none %}{{ cell.vram_max|round|int }}%{% else %}—{% endif %}
                     </div>
                     {% endfor %}
-                    <div class="text-end" title="本周 168 小时 max VRAM 趋势">
+                    <div title="该机 168 小时 max VRAM 趋势">
                         {% set spark_values = [] %}
-                        {% for d in m.days %}
-                          {% for v in d.sparkline %}{% set _ = spark_values.append(v) %}{% endfor %}
-                        {% endfor %}
-                        {{ spark_path(spark_values, 96, 28) }}
+                        {% for d in m.days %}{% for v in d.sparkline %}{% set _ = spark_values.append(v) %}{% endfor %}{% endfor %}
+                        {{ spark_path(spark_values, 88, 32) }}
                     </div>
                 </div>
 
-                <!-- Per-GPU detail rows (collapsed by default) -->
                 <div class="hm-gpu-section" data-parent="{{ m.client_id }}">
                     {% for gpu in m.gpus %}
                     <div class="hm-gpu">
                         <div class="hm-gpu-label" title="{{ gpu.gpu_name }}">
-                            └ GPU {{ gpu.gpu_index }} · {{ gpu.gpu_name }}
+                            GPU {{ gpu.gpu_index }} · {{ gpu.gpu_name }}
                         </div>
                         {% for cell in gpu.days %}
                         <div class="hm-day gpu hm-{{ cell.status }}"
-                             title="{% if cell.vram_max is not none %}{{ cell.weekday }} {{ cell.day }} | VRAM 最高: {{ cell.vram_max }}% | 平均: {{ cell.vram_avg }}% | 峰值: {{ cell.vram_peak }}%{% if cell.err_total %} | 错误: {{ cell.err_total }}{% endif %}{% else %}{{ cell.weekday }} {{ cell.day }} | 无数据{% endif %}">
+                             title="{% if cell.vram_max is not none %}周{{ cell.weekday }} {{ cell.day }} · 最高 {{ cell.vram_max }}% · 平均 {{ cell.vram_avg }}%{% if cell.vram_peak %} · 峰值 {{ cell.vram_peak }}%{% endif %}{% if cell.err_total %} · 错误 {{ cell.err_total }}{% endif %}{% else %}周{{ cell.weekday }} {{ cell.day }} · 无数据{% endif %}">
                             {% if cell.vram_max is not none %}{{ cell.vram_max|round|int }}{% endif %}
                         </div>
                         {% endfor %}
-                        <div class="text-end" title="该卡 168 小时 VRAM 趋势">
+                        <div title="该卡 168 小时趋势">
                             {% set gspark = [] %}
-                            {% for d in gpu.days %}
-                              {% for v in d.sparkline %}{% set _ = gspark.append(v) %}{% endfor %}
-                            {% endfor %}
-                            {{ spark_path(gspark, 96, 18) }}
+                            {% for d in gpu.days %}{% for v in d.sparkline %}{% set _ = gspark.append(v) %}{% endfor %}{% endfor %}
+                            {{ spark_path(gspark, 88, 22) }}
                         </div>
                     </div>
                     {% endfor %}
@@ -351,81 +631,94 @@
                 {% endfor %}
             </div>
 
-            <div class="heatmap-legend">
-                <span><span class="legend-box" style="background:#86efac;"></span>空闲(&lt;20%)</span>
-                <span><span class="legend-box" style="background:#fbbf24;"></span>中等(20-70%)</span>
-                <span><span class="legend-box" style="background:#ef4444;"></span>高占用(≥70%)</span>
-                <span><span class="legend-box" style="background:#6b7280;"></span>故障(全天 nvidia-smi 失败)</span>
-                <span><span class="legend-box" style="background:#f1f5f9;"></span>无数据</span>
-                <span class="text-muted ms-2"><i class="bi bi-info-circle"></i> 数字 = 当日全机最高 VRAM 占用</span>
+            <div class="hm-legend">
+                <span><span class="swatch" style="background: var(--status-low-bg);"></span>空闲 &lt; 20%</span>
+                <span><span class="swatch" style="background: var(--status-mid-bg);"></span>中等 20-70%</span>
+                <span><span class="swatch" style="background: var(--status-high-bg);"></span>高占用 ≥ 70%</span>
+                <span><span class="swatch" style="background: var(--status-error);"></span>故障</span>
+                <span><span class="swatch" style="background: var(--status-nodata);"></span>无数据</span>
+                <span style="margin-left: auto; color: var(--text-tertiary);">数字 = 当日全机最高 VRAM 占用</span>
             </div>
             {% else %}
-            <div class="text-muted">暂无历史数据(客户端首次上报后开始积累)</div>
+            <div class="empty-state">暂无历史数据 · 客户端首次上报后开始积累</div>
             {% endif %}
         </div>
     </div>
 
-    <!-- ③ 长期空闲 GPU -->
-    <div class="card mb-4">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-clock-history text-secondary"></i> ③ 长期空闲 GPU</h5>
+    <!-- ③ Long-term idle -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">Underutilized</div>
+                <h2 class="panel-title">长期空闲 GPU</h2>
+            </div>
         </div>
-        <div class="card-body p-0">
-            {% if longterm_idle %}
-            <p class="text-muted small px-3 pt-3 mb-1">以下 GPU 近 7 天 VRAM 长期低占用,可考虑重新分配或复查是否有访问/调度障碍。</p>
-            <table class="table table-sm mb-0">
-                <thead class="table-light">
-                    <tr><th>机器</th><th>GPU</th><th class="text-center">7d VRAM 均值</th><th class="text-center">7d util 均值</th><th class="text-center">低占用小时数</th></tr>
-                </thead>
-                <tbody>
-                    {% for g in longterm_idle %}
-                    <tr>
-                        <td>{{ g.display_name }}</td>
-                        <td>{{ g.gpu_index }} · {{ g.gpu_name }}</td>
-                        <td class="text-center">{{ g.vram_avg_7d }}%</td>
-                        <td class="text-center">{{ g.util_avg_7d }}%</td>
-                        <td class="text-center">{{ g.low_hours }} / {{ g.total_hours }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="text-muted p-3">暂无长期空闲 GPU</div>
-            {% endif %}
-        </div>
+        {% if longterm_idle %}
+        <div class="table-note">以下 GPU 近 7 天 VRAM 长期低占用,可考虑重新分配或复查访问/调度障碍</div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>机器</th>
+                    <th>GPU</th>
+                    <th class="num">7d VRAM 均值</th>
+                    <th class="num">7d util 均值</th>
+                    <th class="num">低占用小时</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for g in longterm_idle %}
+                <tr>
+                    <td>{{ g.display_name }}</td>
+                    <td class="muted">{{ g.gpu_index }} · {{ g.gpu_name }}</td>
+                    <td class="num">{{ g.vram_avg_7d }}%</td>
+                    <td class="num">{{ g.util_avg_7d }}%</td>
+                    <td class="num">{{ g.low_hours }} <span style="color: var(--text-tertiary);">/ {{ g.total_hours }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="panel-body"><div class="empty-state">暂无长期空闲 GPU</div></div>
+        {% endif %}
     </div>
 
-    <!-- ④ 硬件异常记录 -->
-    <div class="card mb-4">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-exclamation-triangle text-danger"></i> ④ 硬件异常记录</h5>
+    <!-- ④ Hardware errors -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">Hardware Issues</div>
+                <h2 class="panel-title">硬件异常记录</h2>
+            </div>
         </div>
-        <div class="card-body p-0">
-            {% if error_gpus %}
-            <table class="table table-sm mb-0">
-                <thead class="table-light">
-                    <tr><th>机器</th><th>GPU</th><th class="text-center">报错小时数</th><th class="text-center">报错样本总数</th><th>最近报错</th></tr>
-                </thead>
-                <tbody>
-                    {% for g in error_gpus %}
-                    <tr class="error-gpu-row">
-                        <td>{{ g.display_name }}</td>
-                        <td>{{ g.gpu_index }} · {{ g.gpu_name }}</td>
-                        <td class="text-center">{{ g.err_hours }}</td>
-                        <td class="text-center">{{ g.err_samples }}</td>
-                        <td style="font-family:monospace;font-size:11px;">
-                            {% if g.latest_error %}{{ g.latest_error|e|truncate(60) }}{% else %}—{% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="text-muted p-3">本周无硬件异常记录</div>
-            {% endif %}
-        </div>
+        {% if error_gpus %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>机器</th>
+                    <th>GPU</th>
+                    <th class="num">报错小时</th>
+                    <th class="num">报错样本</th>
+                    <th>最近错误</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for g in error_gpus %}
+                <tr>
+                    <td>{{ g.display_name }}</td>
+                    <td class="muted">{{ g.gpu_index }} · {{ g.gpu_name }}</td>
+                    <td class="num"><span class="badge-warn">{{ g.err_hours }}</span></td>
+                    <td class="num">{{ g.err_samples }}</td>
+                    <td class="mono" style="font-size: 11px; color: var(--text-secondary);">
+                        {% if g.latest_error %}{{ g.latest_error|e|truncate(72) }}{% else %}—{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="panel-body"><div class="empty-state">本周无硬件异常记录</div></div>
+        {% endif %}
     </div>
-
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -449,7 +742,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.hm-gpu-section').forEach(el => {
             el.classList.toggle('expanded', allExpanded);
         });
-        btn.textContent = allExpanded ? '全部折叠' : '全部展开 / 折叠';
+        btn.textContent = allExpanded ? '全部折叠' : '全部展开';
     });
 });
 </script>
