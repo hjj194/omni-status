@@ -47,14 +47,17 @@ def test_api_heatmap_returns_json_structure(app, logged_in_client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert 'machines' in data
-    assert data['hours'] == 168
+    assert data['days'] == 7
+    assert len(data['day_labels']) == 7
     assert len(data['machines']) == 1
     machine = data['machines'][0]
     assert machine['hostname'] == 'srv'
     assert machine['gpu_count'] == 1
-    assert len(machine['rollup_cells']) == 168
+    assert len(machine['days']) == 7  # daily aggregated
     assert len(machine['gpus']) == 1
-    assert len(machine['gpus'][0]['cells']) == 168
+    assert len(machine['gpus'][0]['days']) == 7
+    # Each daily cell carries a 24-hour sparkline
+    assert len(machine['days'][0]['sparkline']) == 24
 
 
 def test_heatmap_groups_multiple_gpus_under_one_machine(app, logged_in_client):
@@ -84,11 +87,13 @@ def test_heatmap_groups_multiple_gpus_under_one_machine(app, logged_in_client):
 
     assert machine['gpu_count'] == 4
     assert len(machine['gpus']) == 4
-    # rollup at the seeded hour should reflect max(85, 5, 8, 3) = 85
-    rollup_cell = next((c for c in machine['rollup_cells']
-                         if c['vram_avg'] == 85.0), None)
-    assert rollup_cell is not None
-    assert rollup_cell['status'] == 'high'  # 85 ≥ 70 (heatmap_high_threshold)
+    # Find the day containing the seeded hour and check rollup
+    seeded_day = next((d for d in machine['days']
+                        if d['vram_max'] is not None and d['vram_max'] >= 85.0), None)
+    assert seeded_day is not None
+    assert seeded_day['status'] == 'high'  # 85 ≥ heatmap_high_threshold (70)
+    # Rollup max should reflect max(85, 5, 8, 3) = 85
+    assert seeded_day['vram_max'] == 85.0
 
 
 def test_heatmap_machines_sorted_by_display_order(app, logged_in_client):

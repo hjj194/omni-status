@@ -29,49 +29,87 @@
             text-align: center;
         }
         .summary-stat .num { font-size: 1.8rem; font-weight: 600; }
-        .heatmap-grid {
+        /* ─── Heatmap (status-page style: 7 daily bars + sparkline) ─── */
+        .hm-container { display: flex; flex-direction: column; gap: 4px; }
+        .hm-axis-row {
             display: grid;
-            grid-template-columns: 220px 1fr;
-            gap: 4px;
-            align-items: center;
-            font-size: 11px;
+            grid-template-columns: 220px repeat(7, 1fr) 100px;
+            gap: 6px;
+            font-size: 10px;
+            color: #9ca3af;
+            padding: 0 4px;
         }
-        .heatmap-label {
+        .hm-axis-day {
+            text-align: center;
+            display: flex; flex-direction: column; align-items: center;
+            line-height: 1.2;
+        }
+        .hm-axis-day.is-today { color: #2563eb; font-weight: 600; }
+        .hm-axis-day .wd { font-size: 11px; }
+        .hm-axis-day .dt { font-size: 9px; opacity: 0.8; }
+        .hm-axis-spark { text-align: right; font-size: 9px; color: #9ca3af; }
+
+        .hm-machine, .hm-gpu {
+            display: grid;
+            grid-template-columns: 220px repeat(7, 1fr) 100px;
+            gap: 6px;
+            align-items: center;
+        }
+        .hm-machine { padding: 4px 4px; border-radius: 4px; transition: background 0.15s; }
+        .hm-machine:hover { background: #f9fafb; }
+        .hm-gpu { padding: 2px 4px; }
+
+        .hm-label {
+            display: flex; align-items: center; gap: 4px;
+            font-size: 12px; color: #1f2937; font-weight: 500;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             user-select: none;
         }
-        .heatmap-row {
-            display: grid;
-            grid-template-columns: repeat(168, 1fr);
-            gap: 1px;
-            height: 16px;
+        .hm-label.machine { cursor: pointer; }
+        .hm-label.machine:hover { color: #2563eb; }
+        .hm-label .chevron { color: #9ca3af; transition: transform 0.15s; flex-shrink: 0; }
+        .hm-label.expanded .chevron { transform: rotate(90deg); }
+        .hm-label .meta { color: #9ca3af; font-size: 10px; font-weight: normal; }
+
+        .hm-gpu-label {
+            font-size: 11px; color: #6b7280; padding-left: 24px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .heatmap-row.gpu-row { height: 11px; }
-        .hm-cell { border-radius: 1px; cursor: default; }
-        .hm-nodata { background: #e5e7eb; }
+
+        /* Daily cells: large enough to read percentage inside */
+        .hm-day {
+            height: 32px;
+            border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: 500;
+            color: rgba(0,0,0,0.55);
+            cursor: default;
+            transition: transform 0.1s;
+            user-select: none;
+        }
+        .hm-day:hover { transform: scale(1.05); z-index: 2; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+        .hm-day.gpu { height: 18px; font-size: 9px; border-radius: 3px; }
+
+        .hm-nodata { background: #f1f5f9; color: #94a3b8; }
         .hm-low    { background: #86efac; }
         .hm-mid    { background: #fbbf24; }
-        .hm-high   { background: #ef4444; }
-        .hm-error  { background: #6b7280; }
-        .heatmap-legend { display: flex; gap: 14px; font-size: 11px; color: #6b7280; margin-top: 10px; }
-        .legend-box { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
-        .machine-toggle {
-            cursor: pointer; padding: 2px 4px; border-radius: 4px;
-            display: flex; align-items: center; gap: 4px;
-            color: #1f2937; font-weight: 500;
+        .hm-high   { background: #ef4444; color: rgba(255,255,255,0.92); }
+        .hm-error  { background: #6b7280; color: #fff; }
+
+        /* Sparkline column: SVG min-trend over 168 hours */
+        .hm-sparkline {
+            height: 32px;
+            display: block;
         }
-        .machine-toggle:hover { background: #f3f4f6; }
-        .machine-toggle .chevron {
-            transition: transform 0.15s ease;
-            color: #9ca3af;
-        }
-        .machine-toggle.expanded .chevron { transform: rotate(90deg); }
-        .gpu-detail { display: none; margin-left: 16px; }
-        .gpu-detail.expanded { display: contents; }
-        .gpu-row-label {
-            font-size: 10px; color: #6b7280; padding-left: 24px;
-        }
-        .machine-meta { color: #9ca3af; font-size: 10px; margin-left: 4px; }
+        .hm-sparkline.gpu { height: 18px; }
+
+        /* Legend */
+        .heatmap-legend { display: flex; gap: 14px; font-size: 11px; color: #6b7280; margin-top: 14px; flex-wrap: wrap; }
+        .legend-box { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; margin-right: 4px; }
+
+        /* Per-GPU expanded rows (default hidden) */
+        .hm-gpu-section { display: none; margin-top: 4px; padding-left: 0; }
+        .hm-gpu-section.expanded { display: flex; flex-direction: column; gap: 2px; }
         .idle-card {
             border: 1px solid #bbf7d0;
             background: #f0fdf4;
@@ -221,52 +259,105 @@
         </div>
         <div class="card-body" style="overflow-x:auto;">
             {% if heatmap.machines %}
-            <div class="heatmap-grid mb-2">
-                <div></div>
-                <div style="display:flex;justify-content:space-between;color:#9ca3af;font-size:10px;padding:0 2px;">
-                    <span>7天前</span><span>6d</span><span>5d</span><span>4d</span><span>3d</span><span>2d</span><span>昨天</span><span>今天</span>
-                </div>
+            {% macro spark_path(values, width=96, height=28) %}
+              {% set non_null = values|select|list %}
+              {% if non_null %}
+                {% set vmin = 0 %}
+                {% set vmax = 100 %}
+                {% set step = (width - 2) / (values|length - 1) if values|length > 1 else width %}
+                {% set ns = namespace(d='', last_x=None) %}
+                {% for v in values %}
+                  {% set x = 1 + loop.index0 * step %}
+                  {% if v is not none %}
+                    {% set y = (height - 2) - ((v - vmin) / (vmax - vmin)) * (height - 4) %}
+                    {% if ns.d == '' %}
+                      {% set ns.d = 'M' ~ ('%.1f' % x) ~ ',' ~ ('%.1f' % y) %}
+                    {% else %}
+                      {% set ns.d = ns.d ~ ' L' ~ ('%.1f' % x) ~ ',' ~ ('%.1f' % y) %}
+                    {% endif %}
+                    {% set ns.last_x = x %}
+                  {% endif %}
+                {% endfor %}
+                <svg class="hm-sparkline" viewBox="0 0 {{ width }} {{ height }}" preserveAspectRatio="none">
+                  <path d="{{ ns.d }}" fill="none" stroke="#94a3b8" stroke-width="1.2" />
+                </svg>
+              {% endif %}
+            {% endmacro %}
+
+            <div class="d-flex justify-content-between align-items-center mb-3 px-1" style="font-size:12px;color:#6b7280;">
+                <span>共 <b>{{ heatmap.machines|length }}</b> 台机器 · 7 天每日最高 VRAM 占用 · 点击机器名展开查看每张 GPU</span>
+                <button id="expand-all" class="btn btn-sm btn-outline-secondary" style="font-size:11px;">全部展开 / 折叠</button>
             </div>
-            <div class="d-flex justify-content-between align-items-center mb-2 px-1" style="font-size:11px;color:#6b7280;">
-                <span>共 {{ heatmap.machines|length }} 台机器,点击展开查看每张卡</span>
-                <button id="expand-all" class="btn btn-sm btn-link p-0" style="font-size:11px;">全部展开 / 折叠</button>
-            </div>
-            {% for m in heatmap.machines %}
-            <div class="heatmap-grid mb-1" data-machine-id="{{ m.client_id }}">
-                <div class="machine-toggle" onclick="toggleMachine('{{ m.client_id }}', this)">
-                    <i class="bi bi-chevron-right chevron"></i>
-                    <span class="text-truncate" title="{{ m.display_name }}">{{ m.display_name }}</span>
-                    <span class="machine-meta">×{{ m.gpu_count }}</span>
+
+            <div class="hm-container">
+                <!-- Axis row: day labels -->
+                <div class="hm-axis-row">
+                    <div></div>
+                    {% for d in heatmap.day_labels %}
+                    <div class="hm-axis-day {% if d.is_today %}is-today{% endif %}">
+                        <span class="wd">周{{ d.weekday }}</span>
+                        <span class="dt">{{ d.day }}</span>
+                    </div>
+                    {% endfor %}
+                    <div class="hm-axis-spark">24h 趋势 →</div>
                 </div>
-                <div class="heatmap-row" title="点击展开">
-                    {% for cell in m.rollup_cells %}
-                    <div class="hm-cell hm-{{ cell.status }}"
-                         title="{{ cell.hour[:13] }} | 全机最高 VRAM: {% if cell.vram_avg is not none %}{{ cell.vram_avg }}%{% else %}—{% endif %} | err:{{ cell.err_total }}">
+
+                {% for m in heatmap.machines %}
+                <!-- Machine roll-up row -->
+                <div class="hm-machine" data-machine-id="{{ m.client_id }}">
+                    <div class="hm-label machine" onclick="toggleMachine('{{ m.client_id }}', this)">
+                        <i class="bi bi-chevron-right chevron"></i>
+                        <span class="text-truncate" title="{{ m.display_name }}">{{ m.display_name }}</span>
+                        <span class="meta">×{{ m.gpu_count }}</span>
+                    </div>
+                    {% for cell in m.days %}
+                    <div class="hm-day hm-{{ cell.status }}"
+                         title="{% if cell.vram_max is not none %}{{ cell.weekday }} {{ cell.day }} | 全机最高 VRAM: {{ cell.vram_max }}% | 平均: {{ cell.vram_avg }}%{% if cell.err_total %} | 错误样本: {{ cell.err_total }}{% endif %}{% else %}{{ cell.weekday }} {{ cell.day }} | 无数据{% if cell.err_total %} | {{ cell.err_total }} 错误{% endif %}{% endif %}">
+                        {% if cell.vram_max is not none %}{{ cell.vram_max|round|int }}%{% else %}—{% endif %}
+                    </div>
+                    {% endfor %}
+                    <div class="text-end" title="本周 168 小时 max VRAM 趋势">
+                        {% set spark_values = [] %}
+                        {% for d in m.days %}
+                          {% for v in d.sparkline %}{% set _ = spark_values.append(v) %}{% endfor %}
+                        {% endfor %}
+                        {{ spark_path(spark_values, 96, 28) }}
+                    </div>
+                </div>
+
+                <!-- Per-GPU detail rows (collapsed by default) -->
+                <div class="hm-gpu-section" data-parent="{{ m.client_id }}">
+                    {% for gpu in m.gpus %}
+                    <div class="hm-gpu">
+                        <div class="hm-gpu-label" title="{{ gpu.gpu_name }}">
+                            └ GPU {{ gpu.gpu_index }} · {{ gpu.gpu_name }}
+                        </div>
+                        {% for cell in gpu.days %}
+                        <div class="hm-day gpu hm-{{ cell.status }}"
+                             title="{% if cell.vram_max is not none %}{{ cell.weekday }} {{ cell.day }} | VRAM 最高: {{ cell.vram_max }}% | 平均: {{ cell.vram_avg }}% | 峰值: {{ cell.vram_peak }}%{% if cell.err_total %} | 错误: {{ cell.err_total }}{% endif %}{% else %}{{ cell.weekday }} {{ cell.day }} | 无数据{% endif %}">
+                            {% if cell.vram_max is not none %}{{ cell.vram_max|round|int }}{% endif %}
+                        </div>
+                        {% endfor %}
+                        <div class="text-end" title="该卡 168 小时 VRAM 趋势">
+                            {% set gspark = [] %}
+                            {% for d in gpu.days %}
+                              {% for v in d.sparkline %}{% set _ = gspark.append(v) %}{% endfor %}
+                            {% endfor %}
+                            {{ spark_path(gspark, 96, 18) }}
+                        </div>
                     </div>
                     {% endfor %}
                 </div>
+                {% endfor %}
             </div>
-            {% for gpu in m.gpus %}
-            <div class="heatmap-grid gpu-detail mb-1" data-parent="{{ m.client_id }}">
-                <div class="gpu-row-label" title="{{ gpu.gpu_name }}">
-                    └ GPU {{ gpu.gpu_index }} · {{ gpu.gpu_name }}
-                </div>
-                <div class="heatmap-row gpu-row">
-                    {% for cell in gpu.cells %}
-                    <div class="hm-cell hm-{{ cell.status }}"
-                         title="{{ cell.hour[:13] }} | VRAM:{% if cell.vram_avg is not none %}{{ cell.vram_avg }}%{% else %}—{% endif %} util:{% if cell.util_avg is not none %}{{ cell.util_avg }}%{% else %}—{% endif %} ok:{{ cell.ok }} err:{{ cell.err }}">
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endfor %}
-            {% endfor %}
-            <div class="heatmap-legend mt-2">
+
+            <div class="heatmap-legend">
                 <span><span class="legend-box" style="background:#86efac;"></span>空闲(&lt;20%)</span>
-                <span><span class="legend-box" style="background:#fbbf24;"></span>中等</span>
+                <span><span class="legend-box" style="background:#fbbf24;"></span>中等(20-70%)</span>
                 <span><span class="legend-box" style="background:#ef4444;"></span>高占用(≥70%)</span>
-                <span><span class="legend-box" style="background:#6b7280;"></span>故障</span>
-                <span><span class="legend-box" style="background:#e5e7eb;"></span>无数据</span>
+                <span><span class="legend-box" style="background:#6b7280;"></span>故障(全天 nvidia-smi 失败)</span>
+                <span><span class="legend-box" style="background:#f1f5f9;"></span>无数据</span>
+                <span class="text-muted ms-2"><i class="bi bi-info-circle"></i> 数字 = 当日全机最高 VRAM 占用</span>
             </div>
             {% else %}
             <div class="text-muted">暂无历史数据(客户端首次上报后开始积累)</div>
@@ -341,7 +432,7 @@
 <script>
 function toggleMachine(cid, toggleEl) {
     const expanded = toggleEl.classList.toggle('expanded');
-    document.querySelectorAll(`.gpu-detail[data-parent="${cid}"]`).forEach(el => {
+    document.querySelectorAll(`.hm-gpu-section[data-parent="${cid}"]`).forEach(el => {
         el.classList.toggle('expanded', expanded);
     });
 }
@@ -352,12 +443,13 @@ document.addEventListener('DOMContentLoaded', function() {
     let allExpanded = false;
     btn.addEventListener('click', function() {
         allExpanded = !allExpanded;
-        document.querySelectorAll('.machine-toggle').forEach(t => {
+        document.querySelectorAll('.hm-label.machine').forEach(t => {
             t.classList.toggle('expanded', allExpanded);
         });
-        document.querySelectorAll('.gpu-detail').forEach(el => {
+        document.querySelectorAll('.hm-gpu-section').forEach(el => {
             el.classList.toggle('expanded', allExpanded);
         });
+        btn.textContent = allExpanded ? '全部折叠' : '全部展开 / 折叠';
     });
 });
 </script>

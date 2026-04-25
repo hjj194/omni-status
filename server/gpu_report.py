@@ -491,12 +491,64 @@ def _classify_cell(vram_avg, low_t, high_t):
     return 'high'
 
 
-def get_heatmap_data(days=7):
-    """Returns machine → GPUs hierarchy with per-machine rollup row.
+_WEEKDAY_ZH = ['一', '二', '三', '四', '五', '六', '日']
 
-    Machine rollup = max(vram_avg) across that machine's GPUs in each hour.
-    If any GPU shows error (ok=0, err>0) for an hour, rollup is 'error'.
-    Default UX: machines collapsed, click to expand per-GPU rows.
+
+def _aggregate_to_days(hourly_cells, days, day_starts):
+    """Take 168 hourly cells → 7 daily cells (max + avg + sparkline 24h).
+
+    Each daily cell carries the 24 hourly cells inside it for drill-down via
+    the tooltip / click expansion. Sparkline = list of 24 numbers (vram_avg
+    or null), suitable for SVG path rendering.
+    """
+    daily = []
+    cells_iter = iter(hourly_cells)
+    for d in range(days):
+        day_hours = [next(cells_iter) for _ in range(24)]
+        vram_vals = [c['vram_avg'] for c in day_hours if c.get('vram_avg') is not None]
+        err_total = sum(c.get('err', 0) or c.get('err_total', 0) for c in day_hours)
+        ok_total  = sum(c.get('ok', 0) for c in day_hours)
+        peak_vals = [c.get('vram_peak') for c in day_hours
+                     if c.get('vram_peak') is not None]
+
+        if vram_vals:
+            cell = {
+                'day': day_starts[d].strftime('%m-%d'),
+                'weekday': _WEEKDAY_ZH[day_starts[d].weekday()],
+                'date_iso': day_starts[d].date().isoformat(),
+                'vram_max': round(max(vram_vals), 1),
+                'vram_avg': round(sum(vram_vals) / len(vram_vals), 1),
+                'vram_peak': round(max(peak_vals), 1) if peak_vals else None,
+                'ok_total': ok_total,
+                'err_total': err_total,
+                'hours_observed': len(vram_vals),
+                'sparkline': [c['vram_avg'] for c in day_hours],
+                'status': None,  # set below
+            }
+        else:
+            cell = {
+                'day': day_starts[d].strftime('%m-%d'),
+                'weekday': _WEEKDAY_ZH[day_starts[d].weekday()],
+                'date_iso': day_starts[d].date().isoformat(),
+                'vram_max': None,
+                'vram_avg': None,
+                'vram_peak': None,
+                'ok_total': 0,
+                'err_total': err_total,
+                'hours_observed': 0,
+                'sparkline': [None] * 24,
+                'status': 'error' if err_total > 0 else 'nodata',
+            }
+        daily.append(cell)
+    return daily
+
+
+def get_heatmap_data(days=7):
+    """Returns machine → GPUs hierarchy with daily-aggregated rollup.
+
+    Cells are aggregated to one-per-day (7 cells) instead of one-per-hour
+    (168) for visual clarity. Each daily cell carries a 24-element
+    sparkline for drill-down,plus max/avg/peak/err summary.
     """
     now = datetime.now()
     hour_end   = now.replace(minute=0, second=0, microsecond=0)
@@ -509,7 +561,6 @@ def get_heatmap_data(days=7):
             .filter(GpuHourlyUsage.hour < hour_end)
             .all())
 
-    # Group by (client, gpu) for per-card cells
     per_gpu: dict = {}
     machine_meta: dict = {}
     for usage, hostname, display_name, display_order in rows:
@@ -524,27 +575,26 @@ def get_heatmap_data(days=7):
             }
 
     hours = [hour_start + timedelta(hours=i) for i in range(days * 24)]
+    day_starts = [hour_start + timedelta(days=d) for d in range(days)]
     cfg = _get_cfg()
     low_t  = cfg['heatmap_low_threshold']
     high_t = cfg['heatmap_high_threshold']
 
-    def _gpu_cell(usage, h):
+    def _gpu_hourly(usage, h):
         if usage is None:
-            return {'hour': h.isoformat(), 'status': 'nodata',
-                    'vram_avg': None, 'util_avg': None, 'ok': 0, 'err': 0}
+            return {'hour': h.isoformat(), 'vram_avg': None,
+                    'util_avg': None, 'vram_peak': None, 'ok': 0, 'err': 0}
         if (usage.ok_sample_count or 0) == 0:
-            return {'hour': h.isoformat(), 'status': 'error',
-                    'vram_avg': None, 'util_avg': None,
+            return {'hour': h.isoformat(), 'vram_avg': None,
+                    'util_avg': None, 'vram_peak': None,
                     'ok': 0, 'err': usage.error_count or 0}
-        v = round(usage.vram_pct_avg, 1)
         return {'hour': h.isoformat(),
-                'status': _classify_cell(v, low_t, high_t),
-                'vram_avg': v, 'util_avg': round(usage.util_pct_avg, 1),
+                'vram_avg': round(usage.vram_pct_avg, 1),
+                'util_avg': round(usage.util_pct_avg, 1),
                 'vram_peak': round(usage.vram_pct_peak, 1),
                 'ok': usage.ok_sample_count or 0,
                 'err': usage.error_count or 0}
 
-    # Build per-machine structure
     machines_dict: dict = {}
     for (cid, gidx), cells_by_hour in per_gpu.items():
         meta = machine_meta[cid]
@@ -560,41 +610,57 @@ def get_heatmap_data(days=7):
              if cells_by_hour[h].gpu_name),
             f'GPU {gidx}',
         )
+        gpu_hourly_cells = [_gpu_hourly(cells_by_hour.get(h), h) for h in hours]
+        gpu_daily = _aggregate_to_days(gpu_hourly_cells, days, day_starts)
+        for cell in gpu_daily:
+            if cell['vram_max'] is not None:
+                cell['status'] = _classify_cell(cell['vram_max'], low_t, high_t)
         m['gpus'][gidx] = {
             'gpu_index': gidx,
             'gpu_name': latest_name,
-            'cells': [_gpu_cell(cells_by_hour.get(h), h) for h in hours],
+            'days': gpu_daily,
         }
 
-    # Per-machine rollup row: max of each gpu's cell.vram_avg per hour
     machines = []
     for cid, m in machines_dict.items():
         gpus_sorted = [m['gpus'][gidx] for gidx in sorted(m['gpus'])]
-        rollup_cells = []
-        for hi, h in enumerate(hours):
-            gpu_cells_at_h = [g['cells'][hi] for g in gpus_sorted]
-            vram_vals = [c['vram_avg'] for c in gpu_cells_at_h if c['vram_avg'] is not None]
-            err_vals  = [c['err']      for c in gpu_cells_at_h if c['err']]
-            if vram_vals:
-                v = max(vram_vals)
-                rollup_cells.append({
-                    'hour': h.isoformat(),
+        # Machine rollup: per-day, take max(vram_max) across all GPUs
+        rollup_days = []
+        for di in range(days):
+            day_cells = [g['days'][di] for g in gpus_sorted]
+            vram_maxes = [c['vram_max'] for c in day_cells if c['vram_max'] is not None]
+            err_total  = sum(c['err_total'] for c in day_cells)
+            sparkline_max = []
+            for hi in range(24):
+                hour_vals = [c['sparkline'][hi] for c in day_cells
+                             if c['sparkline'][hi] is not None]
+                sparkline_max.append(max(hour_vals) if hour_vals else None)
+
+            base = day_cells[0]
+            if vram_maxes:
+                v = max(vram_maxes)
+                rollup_days.append({
+                    'day': base['day'], 'weekday': base['weekday'],
+                    'date_iso': base['date_iso'],
+                    'vram_max': round(v, 1),
+                    'vram_avg': round(
+                        sum(c['vram_avg'] for c in day_cells if c['vram_avg'] is not None)
+                        / max(1, sum(1 for c in day_cells if c['vram_avg'] is not None)),
+                        1),
+                    'err_total': err_total,
+                    'gpus_observed': len(day_cells),
+                    'sparkline': sparkline_max,
                     'status': _classify_cell(v, low_t, high_t),
-                    'vram_avg': v,
-                    'gpus_observed': len(gpu_cells_at_h),
-                    'err_total': sum(err_vals),
-                })
-            elif err_vals:
-                rollup_cells.append({
-                    'hour': h.isoformat(), 'status': 'error',
-                    'vram_avg': None, 'gpus_observed': len(gpu_cells_at_h),
-                    'err_total': sum(err_vals),
                 })
             else:
-                rollup_cells.append({
-                    'hour': h.isoformat(), 'status': 'nodata',
-                    'vram_avg': None, 'gpus_observed': len(gpu_cells_at_h),
-                    'err_total': 0,
+                rollup_days.append({
+                    'day': base['day'], 'weekday': base['weekday'],
+                    'date_iso': base['date_iso'],
+                    'vram_max': None, 'vram_avg': None,
+                    'err_total': err_total,
+                    'gpus_observed': len(day_cells),
+                    'sparkline': sparkline_max,
+                    'status': 'error' if err_total > 0 else 'nodata',
                 })
 
         machines.append({
@@ -602,15 +668,25 @@ def get_heatmap_data(days=7):
             'hostname': m['hostname'],
             'display_name': m['display_name'],
             'gpu_count': len(gpus_sorted),
-            'rollup_cells': rollup_cells,
+            'days': rollup_days,
             'gpus': gpus_sorted,
         })
 
     machines.sort(key=lambda m: machine_meta[m['client_id']]['display_order'])
 
+    # Day-axis labels (shown once at the top of the heatmap)
+    day_labels = [
+        {'day': day_starts[d].strftime('%m-%d'),
+         'weekday': _WEEKDAY_ZH[day_starts[d].weekday()],
+         'date_iso': day_starts[d].date().isoformat(),
+         'is_today': day_starts[d].date() == hour_end.date()}
+        for d in range(days)
+    ]
+
     return {'hour_start': hour_start.isoformat(),
             'hour_end': hour_end.isoformat(),
-            'hours': days * 24,
+            'days': days,
+            'day_labels': day_labels,
             'machines': machines}
 
 
