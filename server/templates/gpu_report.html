@@ -126,6 +126,7 @@
             {% endif %}
         </div>
         <div class="card-body">
+            {# |safe is OK here: latest_summary_html was sanitized by render_markdown_safe() (bleach.clean) #}
             {% if latest_summary_html %}
                 {{ latest_summary_html|safe }}
                 <small class="text-muted d-block mt-2">
@@ -153,6 +154,7 @@
                 {% for item in history %}
                 <div class="mb-3 pb-3 border-bottom">
                     <small class="text-muted">{{ item.generated_at.strftime('%Y-%m-%d %H:%M') }}</small>
+                    {# |safe is OK here: item.html was sanitized by render_markdown_safe() (bleach.clean) #}
                     {% if item.html %}
                         {{ item.html|safe }}
                     {% else %}

@@ -162,7 +162,7 @@ def cleanup_hourly():
 
 def cleanup_llm_reports():
     cfg = _get_cfg()
-    keep = cfg.get('llm_report_retention', 12)
+    keep = max(1, int(cfg.get('llm_report_retention', 12)))  # 防御:绝不全删
     ids_to_keep = [r.id for r in
                    LlmReport.query.order_by(LlmReport.generated_at.desc()).limit(keep).all()]
     if ids_to_keep:
@@ -170,7 +170,8 @@ def cleanup_llm_reports():
                    .filter(~LlmReport.id.in_(ids_to_keep))
                    .delete(synchronize_session=False))
     else:
-        deleted = LlmReport.query.delete()
+        # 没有 row to keep(空表),什么都不做
+        deleted = 0
     db.session.commit()
     logger.info(f"LLM 摘要清理: 保留最近 {keep} 条,删除 {deleted} 条")
 
@@ -181,6 +182,10 @@ def _run_in_context(app, func):
             func()
         except Exception as e:
             logger.error(f"scheduled job {func.__name__} 失败: {e}")
+            try:
+                db.session.rollback()
+            except Exception as rb_err:
+                logger.error(f"session rollback 失败: {rb_err}")
 
 
 # ─── Scheduler ────────────────────────────────────────────────────────────────
@@ -305,6 +310,14 @@ def build_llm_payload(now: datetime, cfg: dict) -> dict:
     }
 
 
+def build_llm_payload_with_period(now: datetime, cfg: dict):
+    """Same as build_llm_payload but also returns the period datetimes for DB row."""
+    period_end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    period_start = period_end - timedelta(days=7)
+    payload = build_llm_payload(now, cfg)
+    return payload, period_start, period_end
+
+
 def generate_llm_summary():
     api_key = os.environ.get('ANTHROPIC_API_KEY')
     if not api_key:
@@ -312,7 +325,8 @@ def generate_llm_summary():
         return
 
     cfg = _get_cfg()
-    payload = build_llm_payload(datetime.now(), cfg)
+    payload, period_start_dt, period_end_dt = build_llm_payload_with_period(
+        datetime.now(), cfg)
     payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
@@ -340,11 +354,10 @@ def generate_llm_summary():
                 }],
             )
             content = "".join(b.text for b in resp.content if b.type == 'text')
-            parts = payload['period'].split(' ~ ')
             db.session.add(LlmReport(
                 generated_at=datetime.now(),
-                period_start=datetime.strptime(parts[0], '%Y-%m-%d'),
-                period_end=datetime.strptime(parts[1], '%Y-%m-%d'),
+                period_start=period_start_dt,
+                period_end=period_end_dt,
                 model=cfg.get('llm_model'),
                 status='ok',
                 content=content,
@@ -360,11 +373,10 @@ def generate_llm_summary():
             if attempt < 2:
                 time.sleep([60, 300][attempt])
 
-    parts = payload['period'].split(' ~ ')
     db.session.add(LlmReport(
         generated_at=datetime.now(),
-        period_start=datetime.strptime(parts[0], '%Y-%m-%d'),
-        period_end=datetime.strptime(parts[1], '%Y-%m-%d'),
+        period_start=period_start_dt,
+        period_end=period_end_dt,
         model=cfg.get('llm_model'),
         status='error',
         content=f"{type(last_err).__name__}: {last_err}",
