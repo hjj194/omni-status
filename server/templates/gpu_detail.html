@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ detail.display_name }} · GPU 详情 · Omni-Server-Status</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --bg-page: #F5F5F7;
+            --bg-card: #FFFFFF;
+            --bg-subtle: #F9F9FB;
+            --bg-hover: rgba(0,0,0,0.025);
+            --text-primary:   #1D1D1F;
+            --text-secondary: #6E6E73;
+            --text-tertiary:  #86868B;
+            --text-quaternary:#C7C7CC;
+            --separator: rgba(60, 60, 67, 0.10);
+            --accent: #0071E3;
+            --accent-bg: rgba(0, 113, 227, 0.08);
+            --status-low:#34C759;  --status-low-bg:#E5F8E9;
+            --status-mid:#FF9500;  --status-mid-bg:#FFF1DD;
+            --status-high:#FF3B30; --status-high-bg:#FFE5E2;
+            --status-error:#8E8E93; --status-nodata:#F2F2F7;
+            --shadow-sm: 0 0 0 1px rgba(60,60,67,0.06);
+            --radius-md: 10px; --radius-lg: 14px;
+            --ease: cubic-bezier(0.4, 0.0, 0.2, 1);
+        }
+        * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        html, body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                         "SF Pro Text", "Segoe UI", "PingFang SC",
+                         "Microsoft YaHei", sans-serif;
+            font-feature-settings: "tnum" 1;
+            background: var(--bg-page);
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+        .top-bar {
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid var(--separator);
+            padding: 14px 24px;
+            position: sticky; top: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .top-bar .brand {
+            font-size: 15px; font-weight: 600; text-decoration: none;
+            color: var(--text-primary);
+            display: flex; align-items: center; gap: 6px;
+        }
+        .nav-link {
+            font-size: 13px; color: var(--text-secondary);
+            text-decoration: none; padding: 6px 12px; border-radius: 6px;
+            transition: all 0.15s var(--ease);
+        }
+        .nav-link:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .page { max-width: 1280px; margin: 0 auto; padding: 32px 24px 64px; }
+
+        .breadcrumb-row {
+            font-size: 13px; color: var(--text-secondary);
+            margin-bottom: 12px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .breadcrumb-row a { color: var(--accent); text-decoration: none; }
+        .breadcrumb-row a:hover { text-decoration: underline; }
+        .breadcrumb-row .sep { color: var(--text-quaternary); }
+
+        .page-eyebrow {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--text-tertiary); font-weight: 500; margin-bottom: 6px;
+        }
+        .page-title {
+            font-size: 32px; font-weight: 700; letter-spacing: -0.03em;
+            margin: 0 0 4px;
+        }
+        .page-subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 28px; }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 12px; margin-bottom: 24px;
+        }
+        @media (max-width: 992px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 600px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+        .stat-tile {
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-sm);
+            padding: 14px 16px;
+        }
+        .stat-tile .label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--text-tertiary); font-weight: 600; margin-bottom: 4px;
+        }
+        .stat-tile .value {
+            font-size: 24px; font-weight: 600; letter-spacing: -0.02em;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums; line-height: 1.1;
+        }
+        .stat-tile .value .unit {
+            font-size: 13px; color: var(--text-tertiary); font-weight: 400; margin-left: 1px;
+        }
+        .stat-tile.accent-positive .value { color: var(--status-low); }
+        .stat-tile.accent-warning  .value { color: var(--status-mid); }
+        .stat-tile.accent-negative .value { color: var(--status-high); }
+
+        .panel {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 20px; padding: 22px 24px;
+        }
+        .panel-header {
+            display: flex; align-items: baseline; justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .panel-eyebrow {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+            color: var(--text-tertiary); font-weight: 600; margin-bottom: 2px;
+        }
+        .panel-title {
+            font-size: 18px; font-weight: 600; letter-spacing: -0.02em; margin: 0;
+        }
+        .panel-meta { font-size: 12px; color: var(--text-tertiary); }
+
+        /* SVG chart */
+        .chart-wrap {
+            position: relative;
+            width: 100%; aspect-ratio: 4 / 1;
+            min-height: 240px;
+            user-select: none;
+        }
+        .chart-svg { width: 100%; height: 100%; display: block; }
+        .grid-line { stroke: var(--separator); stroke-width: 0.5; }
+        .day-line { stroke: var(--separator-strong); stroke-width: 0.5; stroke-dasharray: 2 3; }
+        .axis-label {
+            font-size: 10px; fill: var(--text-tertiary);
+            font-family: -apple-system, sans-serif;
+        }
+        .axis-label.today { fill: var(--accent); font-weight: 600; }
+        .y-label { font-size: 10px; fill: var(--text-tertiary); }
+        .vram-line {
+            fill: none; stroke: var(--accent); stroke-width: 1.6;
+            stroke-linejoin: round; stroke-linecap: round;
+        }
+        .vram-area { fill: var(--accent); fill-opacity: 0.08; }
+        .util-line {
+            fill: none; stroke: var(--status-mid); stroke-width: 1.4;
+            stroke-linejoin: round; stroke-linecap: round;
+            stroke-dasharray: 2 3;
+        }
+        .err-marker {
+            fill: var(--status-high); stroke: white; stroke-width: 1;
+        }
+
+        .legend-row {
+            display: flex; gap: 16px; font-size: 11px; color: var(--text-secondary);
+            margin-top: 12px; padding-top: 12px;
+            border-top: 1px solid var(--separator);
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-line {
+            display: inline-block; width: 18px; height: 1.6px;
+            background: var(--accent); border-radius: 1px;
+        }
+        .legend-line.dashed {
+            background: repeating-linear-gradient(90deg, var(--status-mid) 0 3px, transparent 3px 6px);
+            height: 2px;
+        }
+        .legend-dot {
+            display: inline-block; width: 7px; height: 7px;
+            border-radius: 50%; background: var(--status-high);
+            border: 1px solid white; box-shadow: 0 0 0 1px var(--status-high);
+        }
+
+        /* GPU breakdown row */
+        .gpu-row {
+            display: grid;
+            grid-template-columns: 200px 80px 80px 80px 1fr;
+            gap: 12px; align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--separator);
+            font-size: 13px;
+        }
+        .gpu-row:last-child { border-bottom: none; }
+        .gpu-row:hover { background: var(--bg-hover); }
+        .gpu-row .name {
+            font-weight: 500; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        .gpu-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .gpu-row .stat-label {
+            font-size: 10px; color: var(--text-tertiary); text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .gpu-row a { color: var(--accent); text-decoration: none; }
+        .gpu-row a:hover { text-decoration: underline; }
+        .gpu-row .mini-svg { height: 28px; width: 100%; }
+        .gpu-row .mini-svg path { fill: none; stroke: var(--text-tertiary); stroke-width: 1; }
+
+        .empty-state {
+            color: var(--text-tertiary); font-size: 13px;
+            padding: 32px 0; text-align: center;
+        }
+    </style>
+</head>
+<body>
+<nav class="top-bar">
+    <a class="brand" href="/">
+        <i class="bi bi-cpu" style="font-size: 18px; color: var(--accent);"></i>
+        Omni-Server-Status
+    </a>
+    <div>
+        <a href="{{ url_for('gpu_report.report_page') }}" class="nav-link">
+            <i class="bi bi-arrow-left"></i> 返回报告
+        </a>
+        <a href="{{ url_for('logout') }}" class="nav-link">登出</a>
+    </div>
+</nav>
+
+<div class="page">
+    <div class="breadcrumb-row">
+        <a href="{{ url_for('gpu_report.report_page') }}">GPU 使用报告</a>
+        <span class="sep">/</span>
+        {% if detail.gpu_index is not none %}
+        <a href="{{ url_for('gpu_report.detail_page', client_id=detail.client_id) }}">{{ detail.display_name }}</a>
+        <span class="sep">/</span>
+        <span>GPU {{ detail.gpu_index }}</span>
+        {% else %}
+        <span>{{ detail.display_name }}</span>
+        {% endif %}
+    </div>
+
+    <div class="page-eyebrow">
+        {% if detail.gpu_index is not none %}Single-GPU Detail{% else %}Machine Detail{% endif %}
+    </div>
+    <h1 class="page-title">{{ detail.display_name }}</h1>
+    <p class="page-subtitle">
+        {{ detail.gpu_name }} · 过去 7 天 · 168 小时聚合
+    </p>
+
+    {% if detail.stats %}
+    <!-- Stat tiles -->
+    <div class="stat-grid">
+        <div class="stat-tile">
+            <div class="label">VRAM 平均</div>
+            <div class="value">{{ detail.stats.vram_avg }}<span class="unit">%</span></div>
+        </div>
+        <div class="stat-tile {% if detail.stats.vram_peak and detail.stats.vram_peak >= 70 %}accent-negative{% endif %}">
+            <div class="label">VRAM 峰值</div>
+            <div class="value">{{ detail.stats.vram_peak }}<span class="unit">%</span></div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">util 平均</div>
+            <div class="value">{{ detail.stats.util_avg }}<span class="unit">%</span></div>
+        </div>
+        <div class="stat-tile {% if detail.stats.busy_hours > 0 %}accent-warning{% endif %}">
+            <div class="label">高占用时数</div>
+            <div class="value">{{ detail.stats.busy_hours }}<span class="unit">h</span></div>
+        </div>
+        <div class="stat-tile {% if detail.stats.idle_hours > 100 %}accent-positive{% endif %}">
+            <div class="label">空闲时数</div>
+            <div class="value">{{ detail.stats.idle_hours }}<span class="unit">h</span></div>
+        </div>
+        <div class="stat-tile {% if detail.stats.error_total > 0 %}accent-negative{% endif %}">
+            <div class="label">错误样本</div>
+            <div class="value">{{ detail.stats.error_total }}</div>
+        </div>
+    </div>
+
+    <!-- Main line chart -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">7-Day Trend</div>
+                <h2 class="panel-title">VRAM 占用率小时趋势</h2>
+            </div>
+            <div class="panel-meta">
+                {{ detail.stats.observed_hours }} / {{ detail.stats.window_hours }} 小时有数据
+            </div>
+        </div>
+
+        <div class="chart-wrap" id="chart-wrap">
+            {% set W = 1200 %}
+            {% set H = 280 %}
+            {% set MARGIN_L = 36 %}
+            {% set MARGIN_R = 12 %}
+            {% set MARGIN_T = 12 %}
+            {% set MARGIN_B = 30 %}
+            {% set CW = W - MARGIN_L - MARGIN_R %}
+            {% set CH = H - MARGIN_T - MARGIN_B %}
+            {% set N = detail.series_vram|length %}
+            {% set step = CW / (N - 1) if N > 1 else CW %}
+
+            {# Build SVG paths: VRAM line + area + util line + error markers #}
+            {% set vram_ns = namespace(line='', area='M' ~ MARGIN_L ~ ',' ~ (MARGIN_T + CH), last_x=None) %}
+            {% set util_ns = namespace(line='', last_x=None) %}
+            {% for v in detail.series_vram %}
+                {% set x = MARGIN_L + loop.index0 * step %}
+                {% if v is not none %}
+                    {% set y = MARGIN_T + CH - (v / 100) * CH %}
+                    {% if vram_ns.line == '' %}
+                        {% set vram_ns.line = 'M' ~ ('%.2f' % x) ~ ',' ~ ('%.2f' % y) %}
+                    {% else %}
+                        {% set vram_ns.line = vram_ns.line ~ ' L' ~ ('%.2f' % x) ~ ',' ~ ('%.2f' % y) %}
+                    {% endif %}
+                    {% set vram_ns.area = vram_ns.area ~ ' L' ~ ('%.2f' % x) ~ ',' ~ ('%.2f' % y) %}
+                    {% set vram_ns.last_x = x %}
+                {% endif %}
+            {% endfor %}
+            {% if vram_ns.last_x is not none %}
+                {% set vram_ns.area = vram_ns.area ~ ' L' ~ ('%.2f' % vram_ns.last_x) ~ ',' ~ (MARGIN_T + CH) ~ ' Z' %}
+            {% endif %}
+
+            {% for u in detail.series_util %}
+                {% set x = MARGIN_L + loop.index0 * step %}
+                {% if u is not none %}
+                    {% set y = MARGIN_T + CH - (u / 100) * CH %}
+                    {% if util_ns.line == '' %}
+                        {% set util_ns.line = 'M' ~ ('%.2f' % x) ~ ',' ~ ('%.2f' % y) %}
+                    {% else %}
+                        {% set util_ns.line = util_ns.line ~ ' L' ~ ('%.2f' % x) ~ ',' ~ ('%.2f' % y) %}
+                    {% endif %}
+                {% endif %}
+            {% endfor %}
+
+            <svg class="chart-svg" viewBox="0 0 {{ W }} {{ H }}" preserveAspectRatio="none">
+                <!-- Y grid + labels -->
+                {% for pct in [0, 25, 50, 75, 100] %}
+                    {% set y = MARGIN_T + CH - (pct / 100) * CH %}
+                    <line class="grid-line" x1="{{ MARGIN_L }}" y1="{{ y }}" x2="{{ W - MARGIN_R }}" y2="{{ y }}"/>
+                    <text class="y-label" x="{{ MARGIN_L - 6 }}" y="{{ y + 3 }}" text-anchor="end">{{ pct }}%</text>
+                {% endfor %}
+
+                <!-- Day boundary lines + labels -->
+                {% for d in detail.day_labels %}
+                    {% set x = MARGIN_L + d.hour_offset * step %}
+                    {% if not loop.first %}
+                    <line class="day-line" x1="{{ '%.2f' % x }}" y1="{{ MARGIN_T }}" x2="{{ '%.2f' % x }}" y2="{{ MARGIN_T + CH }}"/>
+                    {% endif %}
+                    <text class="axis-label{% if d.is_today %} today{% endif %}"
+                          x="{{ '%.2f' % (x + step * 12) }}" y="{{ MARGIN_T + CH + 18 }}" text-anchor="middle">
+                        周{{ d.weekday }} {{ d.day }}
+                    </text>
+                {% endfor %}
+
+                <!-- Area + line -->
+                {% if vram_ns.area %}<path class="vram-area" d="{{ vram_ns.area }}"/>{% endif %}
+                {% if util_ns.line %}<path class="util-line" d="{{ util_ns.line }}"/>{% endif %}
+                {% if vram_ns.line %}<path class="vram-line" d="{{ vram_ns.line }}"/>{% endif %}
+            </svg>
+        </div>
+
+        <div class="legend-row">
+            <span class="legend-item"><span class="legend-line"></span>VRAM 占用率</span>
+            <span class="legend-item"><span class="legend-line dashed"></span>util 利用率</span>
+            <span class="legend-item" style="margin-left: auto; color: var(--text-tertiary);">
+                X 轴 = 7 天前 → 今天 · Y 轴 = 0-100%
+            </span>
+        </div>
+    </div>
+
+    {% if detail.gpus and detail.gpu_index is none and detail.gpus|length > 1 %}
+    <!-- Per-GPU breakdown (only on machine view) -->
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">Per-GPU Breakdown</div>
+                <h2 class="panel-title">{{ detail.gpus|length }} 张卡分别走势</h2>
+            </div>
+        </div>
+
+        {% for gpu in detail.gpus %}
+        {% set valid = gpu.vram_series|select|list %}
+        <div class="gpu-row">
+            <div class="name">
+                <a href="{{ url_for('gpu_report.detail_page', client_id=detail.client_id, gpu_index=gpu.gpu_index) }}">
+                    GPU {{ gpu.gpu_index }} · {{ gpu.gpu_name }}
+                </a>
+            </div>
+            <div class="num">
+                <div class="stat-label">avg</div>
+                {% if valid %}{{ ((valid|sum) / valid|length)|round(1) }}%{% else %}—{% endif %}
+            </div>
+            <div class="num">
+                <div class="stat-label">peak</div>
+                {% if valid %}{{ valid|max|round(1) }}%{% else %}—{% endif %}
+            </div>
+            <div class="num">
+                <div class="stat-label">err</div>
+                {{ gpu.err_series|sum }}
+            </div>
+            <div>
+                {% set N2 = gpu.vram_series|length %}
+                {% set step2 = 280 / (N2 - 1) if N2 > 1 else 280 %}
+                {% set ns2 = namespace(d='') %}
+                {% for v in gpu.vram_series %}
+                    {% set x = loop.index0 * step2 %}
+                    {% if v is not none %}
+                        {% set y = 26 - (v / 100) * 24 %}
+                        {% if ns2.d == '' %}{% set ns2.d = 'M' ~ ('%.1f' % x) ~ ',' ~ ('%.1f' % y) %}
+                        {% else %}{% set ns2.d = ns2.d ~ ' L' ~ ('%.1f' % x) ~ ',' ~ ('%.1f' % y) %}{% endif %}
+                    {% endif %}
+                {% endfor %}
+                <svg class="mini-svg" viewBox="0 0 280 28" preserveAspectRatio="none">
+                  <path d="{{ ns2.d }}"/>
+                </svg>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="panel">
+        <div class="empty-state">该客户端在过去 7 天内无 GPU 上报数据</div>
+    </div>
+    {% endif %}
+</div>
+</body>
+</html>
