@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.log
 server/server_config.json
+server/runtime_settings.json
 server/monitor.db
+server/monitor.db.before-restore-*
 demo.db
 .claude/PRPs/
