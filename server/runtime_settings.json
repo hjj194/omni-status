@@ -1,0 +1,5 @@
+{
+  "retention_days": 7,
+  "llm_report_retention": 12,
+  "uptime_record_retention_days": 90
+}

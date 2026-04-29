@@ -67,32 +67,75 @@ class LlmReport(db.Model):
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
+RUNTIME_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      'runtime_settings.json')
+
+DEFAULT_CFG = {
+    'retention_days': 7,                 # GpuHourlyUsage 保留天数
+    'idle_vram_threshold': 15,
+    'heatmap_low_threshold': 20,
+    'heatmap_high_threshold': 70,
+    'longterm_vram_threshold': 20,
+    'longterm_hours_required': 120,
+    'llm_model': 'claude-haiku-4-5-20251001',
+    'llm_schedule_cron': '0 9 * * 1',
+    'llm_report_retention': 12,
+    'uptime_record_retention_days': 90,  # UptimeRecord 保留天数
+    'timezone': '',
+}
+
+# Bounds for admin-configurable settings(防御性约束)
+SETTING_BOUNDS = {
+    'retention_days':              (1, 365),
+    'llm_report_retention':        (1, 100),
+    'uptime_record_retention_days': (30, 730),
+}
+
+
+def load_runtime_settings() -> dict:
+    if not os.path.exists(RUNTIME_SETTINGS_FILE):
+        return {}
+    try:
+        with open(RUNTIME_SETTINGS_FILE) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"读取 runtime_settings.json 失败: {e}")
+        return {}
+
+
+def save_runtime_settings(updates: dict, app=None):
+    current = load_runtime_settings()
+    current.update(updates)
+    tmp = RUNTIME_SETTINGS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(current, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, RUNTIME_SETTINGS_FILE)
+    if app is not None:
+        # 立即同步到 app.config 让运行中的代码读到新值
+        cfg = app.config.setdefault('GPU_REPORT', dict(DEFAULT_CFG))
+        cfg.update(updates)
+    logger.info(f"runtime_settings 已更新: {updates}")
+
+
 def load_gpu_report_config(config_parser=None):
-    defaults = {
-        'retention_days': 7,
-        'idle_vram_threshold': 15,
-        'heatmap_low_threshold': 20,
-        'heatmap_high_threshold': 70,
-        'longterm_vram_threshold': 20,
-        'longterm_hours_required': 120,
-        'llm_model': 'claude-haiku-4-5-20251001',
-        'llm_schedule_cron': '0 9 * * 1',
-        'llm_report_retention': 12,
-        'timezone': '',
-    }
-    if config_parser is None or 'gpu_report' not in config_parser:
-        return defaults
-    section = config_parser['gpu_report']
-    result = {}
-    for k, v in defaults.items():
-        if k in section and section[k]:
+    defaults = dict(DEFAULT_CFG)
+    if config_parser is not None and 'gpu_report' in config_parser:
+        section = config_parser['gpu_report']
+        for k, v in defaults.items():
+            if k in section and section[k]:
+                try:
+                    defaults[k] = type(v)(section[k])
+                except (ValueError, TypeError):
+                    pass
+    # 文件 < INI < runtime overrides(管理员面板写的)
+    overrides = load_runtime_settings()
+    for k, v in overrides.items():
+        if k in defaults:
             try:
-                result[k] = type(v)(section[k])
+                defaults[k] = type(DEFAULT_CFG[k])(v)
             except (ValueError, TypeError):
-                result[k] = v
-        else:
-            result[k] = v
-    return result
+                pass
+    return defaults
 
 
 def _get_cfg():
@@ -158,6 +201,18 @@ def cleanup_hourly():
     deleted = GpuHourlyUsage.query.filter(GpuHourlyUsage.hour < cutoff).delete()
     db.session.commit()
     logger.info(f"GPU 小时数据清理: 删除 {deleted} 行(早于 {cutoff.date()})")
+
+    # 同时按配置清理 UptimeRecord 防止无限累积
+    try:
+        from server import UptimeRecord
+        uptime_cutoff = (datetime.now() -
+                         timedelta(days=cfg.get('uptime_record_retention_days', 90))).date()
+        u_deleted = UptimeRecord.query.filter(UptimeRecord.date < uptime_cutoff).delete()
+        if u_deleted > 0:
+            db.session.commit()
+            logger.info(f"UptimeRecord 清理: 删除 {u_deleted} 行(早于 {uptime_cutoff})")
+    except Exception as e:
+        logger.warning(f"UptimeRecord 清理失败: {e}")
 
 
 def cleanup_llm_reports():
@@ -986,6 +1041,207 @@ def api_detail(client_id, gpu_index=None):
     if detail is None:
         return jsonify({'error': 'client not found'}), 404
     return jsonify(detail)
+
+
+# ─── Storage stats & cleanup helpers ──────────────────────────────────────────
+
+def _format_size(num_bytes: int) -> str:
+    """1234 → '1.2 KB', 1234567 → '1.2 MB' etc."""
+    if num_bytes is None:
+        return '—'
+    if num_bytes < 1024:
+        return f'{num_bytes} B'
+    if num_bytes < 1024 ** 2:
+        return f'{num_bytes / 1024:.1f} KB'
+    if num_bytes < 1024 ** 3:
+        return f'{num_bytes / 1024 ** 2:.1f} MB'
+    return f'{num_bytes / 1024 ** 3:.2f} GB'
+
+
+def _table_byte_size(table_name: str) -> int:
+    """Approximate bytes used by a single SQLite table (data + indexes)."""
+    try:
+        result = db.session.execute(db.text(
+            "SELECT SUM(pgsize) FROM dbstat WHERE name = :n OR name LIKE :idx_pat"
+        ), {'n': table_name, 'idx_pat': f'sqlite_autoindex_{table_name}_%'})
+        v = result.scalar()
+        if v is not None:
+            return int(v)
+    except Exception:
+        pass
+    # Fallback: rough estimate using row count × bytes-per-row
+    return -1
+
+
+def get_storage_stats():
+    """Snapshot of disk + DB occupancy + row counts."""
+    from sqlalchemy import inspect
+
+    db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+    db_path = db_uri.replace('sqlite:///', '') if db_uri.startswith('sqlite:///') else None
+    db_size = os.path.getsize(db_path) if db_path and os.path.exists(db_path) else None
+
+    # Per-table row counts
+    n_gpu_hourly = GpuHourlyUsage.query.count()
+    n_llm_report = LlmReport.query.count()
+    n_clients = Client.query.count()
+    try:
+        from server import UptimeRecord, Announcement, User
+        n_uptime = UptimeRecord.query.count()
+        n_announce = Announcement.query.count()
+        n_users = User.query.count()
+    except ImportError:
+        n_uptime = n_announce = n_users = 0
+
+    # Server log files (pattern: server.log + server.log.1..N)
+    log_files = []
+    log_total = 0
+    for log_dir in ['/var/log/system-monitor',
+                    os.path.dirname(os.path.abspath(__file__))]:
+        if not os.path.isdir(log_dir):
+            continue
+        for name in sorted(os.listdir(log_dir)):
+            if name.startswith('server.log'):
+                full = os.path.join(log_dir, name)
+                try:
+                    sz = os.path.getsize(full)
+                except OSError:
+                    continue
+                log_files.append({'name': name, 'path': full, 'size': sz,
+                                   'is_active': name == 'server.log'})
+                log_total += sz
+        if log_files:
+            break
+
+    # In-memory realtime cache
+    rt_count = len(client_realtime_data)
+
+    return {
+        'db_path': db_path,
+        'db_size': db_size,
+        'db_size_human': _format_size(db_size),
+        'tables': [
+            {'name': 'gpu_hourly_usage', 'label': 'GPU 小时聚合',
+             'rows': n_gpu_hourly,
+             'size': _table_byte_size('gpu_hourly_usage'),
+             'cleanable': True, 'kind': 'gpu_hourly'},
+            {'name': 'llm_report', 'label': 'LLM 周报',
+             'rows': n_llm_report,
+             'size': _table_byte_size('llm_report'),
+             'cleanable': True, 'kind': 'llm_report'},
+            {'name': 'uptime_record', 'label': '客户端可用性记录',
+             'rows': n_uptime,
+             'size': _table_byte_size('uptime_record'),
+             'cleanable': True, 'kind': 'uptime'},
+            {'name': 'client', 'label': '客户端注册信息',
+             'rows': n_clients,
+             'size': _table_byte_size('client'),
+             'cleanable': False},
+            {'name': 'announcement', 'label': '公告',
+             'rows': n_announce,
+             'size': _table_byte_size('announcement'),
+             'cleanable': False},
+            {'name': 'user', 'label': '管理员账户',
+             'rows': n_users,
+             'size': _table_byte_size('user'),
+             'cleanable': False},
+        ],
+        'log_files': log_files,
+        'log_total_size': log_total,
+        'log_total_human': _format_size(log_total),
+        'log_backup_count': sum(1 for f in log_files if not f['is_active']),
+        'realtime_cache_count': rt_count,
+    }
+
+
+def preview_cleanup_gpu_hourly(older_than_days: int) -> dict:
+    cutoff = datetime.now() - timedelta(days=older_than_days)
+    cnt = GpuHourlyUsage.query.filter(GpuHourlyUsage.hour < cutoff).count()
+    return {'rows': cnt, 'cutoff': cutoff.isoformat()}
+
+
+def cleanup_gpu_hourly_older_than(older_than_days: int) -> int:
+    cutoff = datetime.now() - timedelta(days=older_than_days)
+    deleted = GpuHourlyUsage.query.filter(GpuHourlyUsage.hour < cutoff).delete()
+    db.session.commit()
+    logger.info(f"管理员清理 gpu_hourly_usage: 删除 {deleted} 行(< {cutoff.date()})")
+    return deleted
+
+
+def preview_cleanup_llm_reports(keep_latest_n: int) -> dict:
+    total = LlmReport.query.count()
+    return {'rows': max(0, total - keep_latest_n), 'total': total}
+
+
+def cleanup_llm_reports_keep(keep_latest_n: int) -> int:
+    keep_latest_n = max(0, int(keep_latest_n))
+    ids_to_keep = [r.id for r in LlmReport.query
+                   .order_by(LlmReport.generated_at.desc())
+                   .limit(keep_latest_n).all()]
+    if ids_to_keep:
+        deleted = LlmReport.query.filter(~LlmReport.id.in_(ids_to_keep)) \
+            .delete(synchronize_session=False)
+    elif keep_latest_n == 0:
+        deleted = LlmReport.query.delete()
+    else:
+        deleted = 0
+    db.session.commit()
+    logger.info(f"管理员清理 llm_report: 保留 {keep_latest_n} 条,删除 {deleted} 条")
+    return deleted
+
+
+def preview_cleanup_uptime(older_than_days: int) -> dict:
+    from server import UptimeRecord
+    cutoff_date = (datetime.now() - timedelta(days=older_than_days)).date()
+    cnt = UptimeRecord.query.filter(UptimeRecord.date < cutoff_date).count()
+    return {'rows': cnt, 'cutoff': cutoff_date.isoformat()}
+
+
+def cleanup_uptime_older_than(older_than_days: int) -> int:
+    from server import UptimeRecord
+    cutoff_date = (datetime.now() - timedelta(days=older_than_days)).date()
+    deleted = UptimeRecord.query.filter(UptimeRecord.date < cutoff_date).delete()
+    db.session.commit()
+    logger.info(f"管理员清理 uptime_record: 删除 {deleted} 行(< {cutoff_date})")
+    return deleted
+
+
+def cleanup_log_backups() -> dict:
+    """Delete rotated server.log.1, .2, .3, ... but keep the active server.log."""
+    deleted = []
+    freed = 0
+    for log_dir in ['/var/log/system-monitor',
+                    os.path.dirname(os.path.abspath(__file__))]:
+        if not os.path.isdir(log_dir):
+            continue
+        for name in os.listdir(log_dir):
+            if name.startswith('server.log.'):
+                full = os.path.join(log_dir, name)
+                try:
+                    sz = os.path.getsize(full)
+                    os.remove(full)
+                    deleted.append(name)
+                    freed += sz
+                except OSError as e:
+                    logger.warning(f"删除日志备份失败 {full}: {e}")
+        if deleted:
+            break
+    logger.info(f"管理员清理日志备份: 删除 {len(deleted)} 个文件,释放 {freed / 1024:.1f} KB")
+    return {'deleted_count': len(deleted), 'bytes_freed': freed}
+
+
+def vacuum_database() -> dict:
+    db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+    db_path = db_uri.replace('sqlite:///', '') if db_uri.startswith('sqlite:///') else None
+    if not db_path or not os.path.exists(db_path):
+        return {'before': 0, 'after': 0, 'freed': 0}
+    before = os.path.getsize(db_path)
+    db.session.commit()
+    db.session.execute(db.text('VACUUM'))
+    db.session.commit()
+    after = os.path.getsize(db_path)
+    logger.info(f"管理员 VACUUM: {before} → {after} bytes ({(before - after) / 1024:.1f} KB freed)")
+    return {'before': before, 'after': after, 'freed': max(0, before - after)}
 
 
 @gpu_report_bp.route('/api/idle.json')

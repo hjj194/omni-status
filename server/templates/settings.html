@@ -194,8 +194,395 @@
                 </div>
             </div>
         </div>
+
+        <!-- ─── 数据保留策略 ─────────────────────────────────────────── -->
+        <div class="card mt-4">
+            <div class="card-header d-flex align-items-center">
+                <i class="bi bi-clock-history settings-icon"></i>
+                <h5 class="mb-0">数据保留策略</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info py-2 mb-3">
+                    <small>
+                        <i class="bi bi-info-circle me-1"></i>
+                        修改后立即生效,APScheduler 每小时第 5 分钟按当前配置执行清理。
+                    </small>
+                </div>
+                <form action="{{ url_for('save_retention') }}" method="post" class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">GPU 小时数据保留</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" name="gpu_hourly_days"
+                                   value="{{ retention.gpu_hourly_days }}"
+                                   min="{{ retention.bounds.retention_days[0] }}"
+                                   max="{{ retention.bounds.retention_days[1] }}" required>
+                            <span class="input-group-text">天</span>
+                        </div>
+                        <div class="form-text">
+                            范围 {{ retention.bounds.retention_days[0] }}-{{ retention.bounds.retention_days[1] }} 天 ·
+                            113 GPU × 7 天 ≈ 4 MB
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">LLM 周报保留</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" name="llm_report_count"
+                                   value="{{ retention.llm_report_count }}"
+                                   min="{{ retention.bounds.llm_report_retention[0] }}"
+                                   max="{{ retention.bounds.llm_report_retention[1] }}" required>
+                            <span class="input-group-text">条</span>
+                        </div>
+                        <div class="form-text">
+                            范围 {{ retention.bounds.llm_report_retention[0] }}-{{ retention.bounds.llm_report_retention[1] }} 条 ·
+                            ~2 KB / 条
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">客户端可用性记录保留</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control" name="uptime_days"
+                                   value="{{ retention.uptime_days }}"
+                                   min="{{ retention.bounds.uptime_record_retention_days[0] }}"
+                                   max="{{ retention.bounds.uptime_record_retention_days[1] }}" required>
+                            <span class="input-group-text">天</span>
+                        </div>
+                        <div class="form-text">
+                            范围 {{ retention.bounds.uptime_record_retention_days[0] }}-{{ retention.bounds.uptime_record_retention_days[1] }} 天 ·
+                            dashboard 30 天历史条受此影响
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i> 保存保留策略
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- ─── 存储空间统计 ─────────────────────────────────────────── -->
+        <div class="card mt-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-hdd-stack settings-icon"></i>
+                    <h5 class="mb-0">存储空间统计</h5>
+                </div>
+                <div class="d-flex gap-2">
+                    <small class="text-muted">数据库 {{ storage.db_size_human }}</small>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:36%;">类别</th>
+                            <th class="text-end">条数 / 行数</th>
+                            <th class="text-end">大小</th>
+                            <th class="text-end" style="width:30%;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- DB 表格 -->
+                        {% for t in storage.tables %}
+                        <tr>
+                            <td>
+                                <i class="bi bi-table text-muted me-1"></i>
+                                {{ t.label }}
+                                <small class="text-muted ms-1">({{ t.name }})</small>
+                            </td>
+                            <td class="text-end font-monospace">{{ "{:,}".format(t.rows) }}</td>
+                            <td class="text-end font-monospace">
+                                {% if t.size > 0 %}
+                                {% if t.size < 1024 %}{{ t.size }} B
+                                {% elif t.size < 1024*1024 %}{{ "%.1f"|format(t.size / 1024) }} KB
+                                {% else %}{{ "%.1f"|format(t.size / 1024 / 1024) }} MB{% endif %}
+                                {% else %}—{% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if t.kind == 'gpu_hourly' %}
+                                <button type="button" class="btn btn-sm btn-outline-warning"
+                                        data-bs-toggle="modal" data-bs-target="#cleanupGpuHourlyModal">
+                                    <i class="bi bi-trash3"></i> 清理
+                                </button>
+                                {% elif t.kind == 'llm_report' %}
+                                <button type="button" class="btn btn-sm btn-outline-warning"
+                                        data-bs-toggle="modal" data-bs-target="#cleanupLlmReportModal">
+                                    <i class="bi bi-trash3"></i> 清理
+                                </button>
+                                {% elif t.kind == 'uptime' %}
+                                <button type="button" class="btn btn-sm btn-outline-warning"
+                                        data-bs-toggle="modal" data-bs-target="#cleanupUptimeModal">
+                                    <i class="bi bi-trash3"></i> 清理
+                                </button>
+                                {% else %}
+                                <small class="text-muted">不可清理</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        <!-- 实时缓存 -->
+                        <tr>
+                            <td>
+                                <i class="bi bi-memory text-muted me-1"></i>
+                                实时数据缓存
+                                <small class="text-muted ms-1">(进程内存)</small>
+                            </td>
+                            <td class="text-end font-monospace">{{ storage.realtime_cache_count }} 客户端</td>
+                            <td class="text-end font-monospace">—</td>
+                            <td class="text-end">
+                                <form action="{{ url_for('clear_cache') }}" method="post" class="d-inline"
+                                      onsubmit="return confirm('确定要清除所有客户端的实时数据缓存吗？\n下次客户端上报会自动重建,不影响历史数据。');">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="bi bi-trash3"></i> 清空
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        <!-- 服务端日志 -->
+                        <tr>
+                            <td>
+                                <i class="bi bi-file-text text-muted me-1"></i>
+                                服务端日志
+                                {% if storage.log_files %}
+                                <small class="text-muted ms-1">
+                                    ({{ storage.log_files|length }} 文件 · {{ storage.log_backup_count }} 个轮转备份)
+                                </small>
+                                {% endif %}
+                            </td>
+                            <td class="text-end font-monospace">—</td>
+                            <td class="text-end font-monospace">{{ storage.log_total_human }}</td>
+                            <td class="text-end">
+                                {% if storage.log_backup_count > 0 %}
+                                <form action="{{ url_for('admin_cleanup_log_backups') }}" method="post" class="d-inline"
+                                      onsubmit="return confirm('删除所有已轮转的旧日志文件 (server.log.1, .2, ...)?\n当前活动日志 (server.log) 不会被删除。');">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="bi bi-trash3"></i> 清理备份
+                                    </button>
+                                </form>
+                                {% else %}
+                                <small class="text-muted">无备份可清理</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <!-- VACUUM -->
+                        <tr>
+                            <td>
+                                <i class="bi bi-arrows-collapse text-muted me-1"></i>
+                                数据库整理 (VACUUM)
+                                <small class="text-muted ms-1">回收已删除行的物理空间</small>
+                            </td>
+                            <td class="text-end font-monospace">—</td>
+                            <td class="text-end font-monospace">—</td>
+                            <td class="text-end">
+                                <form action="{{ url_for('admin_vacuum_db') }}" method="post" class="d-inline"
+                                      onsubmit="return confirm('VACUUM 会重建整个数据库以释放空闲页。\n此操作可能阻塞写入若干秒,确定继续？');">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                        <i class="bi bi-arrows-collapse"></i> VACUUM
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                {% if storage.log_files %}
+                <div class="px-3 py-2 small text-muted border-top">
+                    <details>
+                        <summary style="cursor:pointer;">日志文件清单 ({{ storage.log_files|length }} 个)</summary>
+                        <table class="table table-sm mt-2 mb-0">
+                            {% for f in storage.log_files %}
+                            <tr>
+                                <td class="font-monospace">{{ f.name }}{% if f.is_active %} <span class="badge bg-success">active</span>{% endif %}</td>
+                                <td class="text-end font-monospace">
+                                    {% if f.size < 1024 %}{{ f.size }} B
+                                    {% elif f.size < 1024*1024 %}{{ "%.1f"|format(f.size / 1024) }} KB
+                                    {% else %}{{ "%.1f"|format(f.size / 1024 / 1024) }} MB{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </details>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- ─── 数据导入 / 导出 ─────────────────────────────────────────── -->
+        <div class="card mt-4">
+            <div class="card-header d-flex align-items-center">
+                <i class="bi bi-arrow-down-up settings-icon"></i>
+                <h5 class="mb-0">数据备份与迁移</h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <h6 class="text-muted mb-2"><i class="bi bi-download"></i> 导出</h6>
+                        <div class="d-grid gap-2">
+                            <a href="{{ url_for('export_db') }}" class="btn btn-outline-primary text-start">
+                                <i class="bi bi-database me-2"></i>
+                                <span>整库 SQLite 备份</span>
+                                <small class="d-block text-muted ms-4">
+                                    完整 monitor.db,可用于异地灾备 / 迁移
+                                </small>
+                            </a>
+                            <a href="{{ url_for('export_gpu_hourly_csv') }}" class="btn btn-outline-primary text-start">
+                                <i class="bi bi-file-earmark-spreadsheet me-2"></i>
+                                <span>GPU 小时数据 CSV</span>
+                                <small class="d-block text-muted ms-4">
+                                    {{ "{:,}".format(storage.tables[0].rows) }} 行 · 适合 pandas / Excel
+                                </small>
+                            </a>
+                            <a href="{{ url_for('export_llm_reports') }}" class="btn btn-outline-primary text-start">
+                                <i class="bi bi-robot me-2"></i>
+                                <span>LLM 周报 JSON</span>
+                                <small class="d-block text-muted ms-4">
+                                    {{ "{:,}".format(storage.tables[1].rows) }} 条 · 留档历史摘要(避免 cleanup 删除)
+                                </small>
+                            </a>
+                            <a href="{{ url_for('export_runtime_settings') }}" class="btn btn-outline-primary text-start">
+                                <i class="bi bi-sliders me-2"></i>
+                                <span>运行时配置 JSON</span>
+                                <small class="d-block text-muted ms-4">
+                                    保留策略阈值 / 时区等管理员覆盖项
+                                </small>
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <h6 class="text-muted mb-2"><i class="bi bi-upload"></i> 导入</h6>
+                        <div class="alert alert-warning py-2 mb-3">
+                            <small>
+                                <i class="bi bi-exclamation-triangle me-1"></i>
+                                整库导入会替换当前 DB,旧库自动备份为
+                                <code>monitor.db.before-restore-YYYYMMDD-HHMMSS</code>
+                            </small>
+                        </div>
+
+                        <form action="{{ url_for('import_db') }}" method="post" enctype="multipart/form-data"
+                              class="mb-3"
+                              onsubmit="return confirm('上传后会替换当前 monitor.db,旧库自动备份。\n继续吗?');">
+                            <label class="form-label small text-muted">恢复整库 (.db 文件)</label>
+                            <div class="input-group">
+                                <input type="file" class="form-control form-control-sm"
+                                       name="db_file" accept=".db,.sqlite,.sqlite3" required>
+                                <button type="submit" class="btn btn-warning btn-sm">
+                                    <i class="bi bi-upload"></i> 恢复
+                                </button>
+                            </div>
+                        </form>
+
+                        <form action="{{ url_for('import_runtime_settings') }}" method="post" enctype="multipart/form-data">
+                            <label class="form-label small text-muted">导入运行时配置 (.json 文件)</label>
+                            <div class="input-group">
+                                <input type="file" class="form-control form-control-sm"
+                                       name="settings_file" accept=".json" required>
+                                <button type="submit" class="btn btn-primary btn-sm">
+                                    <i class="bi bi-upload"></i> 导入
+                                </button>
+                            </div>
+                            <small class="form-text text-muted">
+                                只接受合法 bounds 范围内的设置项,其他字段会被忽略
+                            </small>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-    
+
+    <!-- ─── Cleanup Modals ─────────────────────────────────────────── -->
+    <div class="modal fade" id="cleanupGpuHourlyModal" tabindex="-1">
+      <div class="modal-dialog">
+        <form action="{{ url_for('admin_cleanup_gpu_hourly') }}" method="post" class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-trash3 text-warning me-2"></i>清理 GPU 小时数据</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small">删除指定天数前的 GPU 小时聚合记录。<b>不影响实时 dashboard</b>,但 7 天热力图和 AI 周报会失去早于该日期的数据。</p>
+            <div class="mb-3">
+              <label class="form-label">删除多少天前的数据</label>
+              <div class="input-group">
+                <input type="number" class="form-control" name="older_than_days"
+                       value="{{ retention.gpu_hourly_days }}" min="1" max="3650" required>
+                <span class="input-group-text">天前</span>
+              </div>
+              <div class="form-text">建议设为当前保留策略 ({{ retention.gpu_hourly_days }}) 或更大值。</div>
+            </div>
+            <div class="alert alert-warning small mb-0">
+              <i class="bi bi-exclamation-triangle"></i>
+              当前共 {{ "{:,}".format(storage.tables[0].rows) }} 行,删除操作不可撤销。
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button type="submit" class="btn btn-warning"><i class="bi bi-trash3 me-1"></i>确认清理</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal fade" id="cleanupLlmReportModal" tabindex="-1">
+      <div class="modal-dialog">
+        <form action="{{ url_for('admin_cleanup_llm_reports') }}" method="post" class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-trash3 text-warning me-2"></i>清理 LLM 周报</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small">只保留最近 N 条 LLM 周报,其余删除。</p>
+            <div class="mb-3">
+              <label class="form-label">保留最近</label>
+              <div class="input-group">
+                <input type="number" class="form-control" name="keep_latest_n"
+                       value="{{ retention.llm_report_count }}" min="0" max="1000" required>
+                <span class="input-group-text">条</span>
+              </div>
+            </div>
+            <div class="alert alert-warning small mb-0">
+              <i class="bi bi-exclamation-triangle"></i>
+              当前共 {{ "{:,}".format(storage.tables[1].rows) }} 条 LLM 报告。
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button type="submit" class="btn btn-warning"><i class="bi bi-trash3 me-1"></i>确认清理</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal fade" id="cleanupUptimeModal" tabindex="-1">
+      <div class="modal-dialog">
+        <form action="{{ url_for('admin_cleanup_uptime') }}" method="post" class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-trash3 text-warning me-2"></i>清理客户端可用性记录</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small">dashboard 上的 "30 天可用性历史条" 依赖此表。删除会让早于该日期的可用性条变成"无数据"灰色。</p>
+            <div class="mb-3">
+              <label class="form-label">删除多少天前的数据</label>
+              <div class="input-group">
+                <input type="number" class="form-control" name="older_than_days"
+                       value="{{ retention.uptime_days }}" min="7" max="3650" required>
+                <span class="input-group-text">天前</span>
+              </div>
+              <div class="form-text">至少要 ≥ 7 天,以保留 dashboard 一周历史。</div>
+            </div>
+            <div class="alert alert-warning small mb-0">
+              <i class="bi bi-exclamation-triangle"></i>
+              当前共 {{ "{:,}".format(storage.tables[2].rows) }} 行可用性记录。
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button type="submit" class="btn btn-warning"><i class="bi bi-trash3 me-1"></i>确认清理</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
