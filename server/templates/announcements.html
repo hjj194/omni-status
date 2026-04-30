@@ -84,6 +84,7 @@
                     </div>
                     <div class="card-body">
                         <form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="action" value="add">
                             <div class="mb-3">
                                 <label for="title" class="form-label">公告标题</label>
@@ -134,6 +135,7 @@
                                             <i class="bi bi-pencil"></i>
                                         </a>
                                         <form method="post" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="action" value="toggle">
                                             <input type="hidden" name="announcement_id" value="{{ announcement.id }}">
                                             <button type="submit" class="btn btn-outline-{% if announcement.is_active %}warning{% else %}success{% endif %}" title="{% if announcement.is_active %}禁用{% else %}启用{% endif %}公告">
@@ -141,6 +143,7 @@
                                             </button>
                                         </form>
                                         <form method="post" style="display: inline;" onsubmit="return confirm('确定要删除这个公告吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="announcement_id" value="{{ announcement.id }}">
                                             <button type="submit" class="btn btn-outline-danger">

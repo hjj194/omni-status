@@ -104,7 +104,7 @@ def test_client_delete_cascades_gpu_hourly_usage(app):
     with app.app_context():
         pre = GpuHourlyUsage.query.filter_by(client_id=cid).count()
         assert pre == 3
-        client = Client.query.get(cid)
+        client = db.session.get(Client, cid)
         db.session.delete(client)
         db.session.commit()
         post = GpuHourlyUsage.query.filter_by(client_id=cid).count()

@@ -197,6 +197,13 @@
                         <h5 class="mb-0 d-flex align-items-center">
                             <span class="status-dot {% if client.is_online %}online{% else %}offline{% endif %}" title="{{ client.is_online and '在线' or '离线' }}"></span>
                             <span class="text-truncate">{{ client.display_name }}</span>
+                            {% if client.client_version and expected_client_version
+                                  and client.client_version != expected_client_version %}
+                            <span class="badge bg-warning text-dark ms-1"
+                                  title="当前 {{ client.client_version }},服务端期望 {{ expected_client_version }}">
+                                <i class="bi bi-arrow-up-circle"></i> 待升级
+                            </span>
+                            {% endif %}
                         </h5>
                         <div class="tools-container">
                             {% if is_admin %}
@@ -204,6 +211,7 @@
                                 <i class="bi bi-pencil"></i>
                             </a>
                             <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" style="display:inline;" onclick="event.stopPropagation();" onsubmit="return confirm('确定删除客户端「{{ client.display_name }}」吗？此操作不可撤销。');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-sm btn-outline-danger" title="删除客户端">
                                     <i class="bi bi-trash"></i>
                                 </button>

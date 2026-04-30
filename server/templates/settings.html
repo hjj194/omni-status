@@ -87,6 +87,7 @@
                     </div>
                     <div class="card-body">
                         <form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="mb-3">
                                 <label for="current_password" class="form-label">当前密码</label>
                                 <input type="password" class="form-control" id="current_password" name="current_password" required>
@@ -164,18 +165,21 @@
                         
                         <div class="d-grid gap-2 d-md-block">
                             <form action="{{ url_for('export_config') }}" method="post" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-primary">
                                     <i class="bi bi-download me-1"></i> 导出配置
                                 </button>
                             </form>
                             
                             <form action="{{ url_for('import_config') }}" method="post" style="display: inline;" onsubmit="return confirm('导入配置将覆盖现有的客户端配置信息，确定继续吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-success">
                                     <i class="bi bi-upload me-1"></i> 导入配置
                                 </button>
                             </form>
                             
                             <form action="{{ url_for('clear_cache') }}" method="post" style="display: inline;" onsubmit="return confirm('确定要清除所有客户端的实时数据缓存吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-warning">
                                     <i class="bi bi-trash3 me-1"></i> 清除缓存
                                 </button>
@@ -209,6 +213,7 @@
                     </small>
                 </div>
                 <form action="{{ url_for('save_retention') }}" method="post" class="row g-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="col-md-4">
                         <label class="form-label">GPU 小时数据保留</label>
                         <div class="input-group">
@@ -332,6 +337,7 @@
                             <td class="text-end">
                                 <form action="{{ url_for('clear_cache') }}" method="post" class="d-inline"
                                       onsubmit="return confirm('确定要清除所有客户端的实时数据缓存吗？\n下次客户端上报会自动重建,不影响历史数据。');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-sm btn-outline-warning">
                                         <i class="bi bi-trash3"></i> 清空
                                     </button>
@@ -355,6 +361,7 @@
                                 {% if storage.log_backup_count > 0 %}
                                 <form action="{{ url_for('admin_cleanup_log_backups') }}" method="post" class="d-inline"
                                       onsubmit="return confirm('删除所有已轮转的旧日志文件 (server.log.1, .2, ...)?\n当前活动日志 (server.log) 不会被删除。');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-sm btn-outline-warning">
                                         <i class="bi bi-trash3"></i> 清理备份
                                     </button>
@@ -376,6 +383,7 @@
                             <td class="text-end">
                                 <form action="{{ url_for('admin_vacuum_db') }}" method="post" class="d-inline"
                                       onsubmit="return confirm('VACUUM 会重建整个数据库以释放空闲页。\n此操作可能阻塞写入若干秒,确定继续？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-sm btn-outline-secondary">
                                         <i class="bi bi-arrows-collapse"></i> VACUUM
                                     </button>
@@ -461,6 +469,7 @@
                         <form action="{{ url_for('import_db') }}" method="post" enctype="multipart/form-data"
                               class="mb-3"
                               onsubmit="return confirm('上传后会替换当前 monitor.db,旧库自动备份。\n继续吗?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <label class="form-label small text-muted">恢复整库 (.db 文件)</label>
                             <div class="input-group">
                                 <input type="file" class="form-control form-control-sm"
@@ -472,6 +481,7 @@
                         </form>
 
                         <form action="{{ url_for('import_runtime_settings') }}" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <label class="form-label small text-muted">导入运行时配置 (.json 文件)</label>
                             <div class="input-group">
                                 <input type="file" class="form-control form-control-sm"
@@ -494,6 +504,7 @@
     <div class="modal fade" id="cleanupGpuHourlyModal" tabindex="-1">
       <div class="modal-dialog">
         <form action="{{ url_for('admin_cleanup_gpu_hourly') }}" method="post" class="modal-content">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="modal-header">
             <h5 class="modal-title"><i class="bi bi-trash3 text-warning me-2"></i>清理 GPU 小时数据</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -525,6 +536,7 @@
     <div class="modal fade" id="cleanupLlmReportModal" tabindex="-1">
       <div class="modal-dialog">
         <form action="{{ url_for('admin_cleanup_llm_reports') }}" method="post" class="modal-content">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="modal-header">
             <h5 class="modal-title"><i class="bi bi-trash3 text-warning me-2"></i>清理 LLM 周报</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -555,6 +567,7 @@
     <div class="modal fade" id="cleanupUptimeModal" tabindex="-1">
       <div class="modal-dialog">
         <form action="{{ url_for('admin_cleanup_uptime') }}" method="post" class="modal-content">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="modal-header">
             <h5 class="modal-title"><i class="bi bi-trash3 text-warning me-2"></i>清理客户端可用性记录</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>

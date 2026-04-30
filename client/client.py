@@ -14,6 +14,9 @@ import configparser
 import sys
 import concurrent.futures
 
+# 客户端版本号(每次发布升级一次,服务端用它标识哪些机器待升级)
+CLIENT_VERSION = '0426-1'
+
 # 检查配置文件路径
 CONFIG_FILE = '/etc/system-monitor/client.conf'
 CLIENT_ID_FILE = '/etc/system-monitor/.client_id'
@@ -230,6 +233,7 @@ def get_system_info(client_id):
     
     return {
         'client_id': client_id,
+        'client_version': CLIENT_VERSION,
         'timestamp': timestamp,
         'hostname': hostname,
         'ip_address': ip_address,
@@ -244,14 +248,24 @@ def get_system_info(client_id):
         'uptime_seconds': uptime_seconds
     }
 
-def report_to_server(server_url, data):
-    """将数据发送到服务器"""
+def report_to_server(server_url, data, report_token=None):
+    """将数据发送到服务器。
+
+    若配置了 report_token,会自动以 Bearer 形式放进 Authorization 头。
+    服务器侧不强制时无影响,强制时缺/错 token 会收到 401。
+    """
+    headers = {}
+    if report_token:
+        headers['Authorization'] = f'Bearer {report_token}'
     try:
-        response = requests.post(server_url, json=data, timeout=10)
+        response = requests.post(server_url, json=data, timeout=10, headers=headers)
         if response.status_code == 200:
             # 成功上报降级为 DEBUG 避免日志噪音(每 60s 一次,长期会撑满 40MB 配额)
             logger.debug(f"数据成功上报到服务器，状态码: {response.status_code}")
             return True
+        elif response.status_code == 401:
+            logger.error("/report 鉴权失败:report_token 未配置或与服务端不匹配")
+            return False
         else:
             logger.error(f"服务器返回错误，状态码: {response.status_code}, 响应: {response.text}")
             return False
@@ -264,23 +278,31 @@ def main():
     config = load_config()
     server_url = config.get('server', 'url')
     report_interval = int(config.get('server', 'report_interval'))
-    
+    # 可选共享密钥(服务端 server.conf [server] report_token 配了就要传)
+    try:
+        report_token = config.get('server', 'report_token')
+    except Exception:
+        report_token = os.environ.get('REPORT_TOKEN', '')
+    if not report_token:
+        report_token = os.environ.get('REPORT_TOKEN', '')
+
     # 获取客户端ID
     client_id = get_client_id()
 
     # 初始化 CPU 采样基准（首次调用返回值无意义，丢弃）
     psutil.cpu_percent(interval=None)
-    
+
     logger.info(f"客户端监控服务启动，客户端ID: {client_id}")
-    logger.info(f"服务器地址: {server_url}, 上报间隔: {report_interval}秒")
-    
+    logger.info(f"服务器地址: {server_url}, 上报间隔: {report_interval}秒"
+                f"{' (with report_token)' if report_token else ''}")
+
     # 如果是以测试模式运行
     if len(sys.argv) > 1 and sys.argv[1] == '--test':
         try:
             system_info = get_system_info(client_id)
             print(json.dumps(system_info, indent=2))
             print("\n尝试连接服务器...")
-            success = report_to_server(server_url, system_info)
+            success = report_to_server(server_url, system_info, report_token=report_token)
             if success:
                 print("✅ 服务器连接成功！数据已上报。")
                 return 0
@@ -290,15 +312,15 @@ def main():
         except Exception as e:
             print(f"❌ 测试时出错: {e}")
             return 1
-    
+
     # 主循环
     while True:
         try:
             system_info = get_system_info(client_id)
-            report_to_server(server_url, system_info)
+            report_to_server(server_url, system_info, report_token=report_token)
         except Exception as e:
             logger.error(f"获取或上报系统信息时出错: {e}")
-        
+
         time.sleep(report_interval)
 
 if __name__ == "__main__":

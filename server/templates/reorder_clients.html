@@ -130,6 +130,7 @@
         </div>
         {% else %}
         <form id="reorderForm" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="row mb-4">
                 <div class="col-12">
                     <div id="clientList" class="list-group">

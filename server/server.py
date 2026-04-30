@@ -48,7 +48,9 @@ def load_config():
         'host': '0.0.0.0',
         'port': 5000,
         'secret_key': os.environ.get('SECRET_KEY', 'dev_key_change_in_production'),
-        'debug': False
+        'debug': False,
+        # /report 共享密钥;留空表示不强制(过渡兼容旧客户端)
+        'report_token': os.environ.get('REPORT_TOKEN', ''),
     }
     
     if os.path.exists(config_file):
@@ -64,7 +66,8 @@ def load_config():
                 'host': server_config.get('host'),
                 'port': int(server_config.get('port')),
                 'secret_key': server_config.get('secret_key'),
-                'debug': server_config.getboolean('debug')
+                'debug': server_config.getboolean('debug'),
+                'report_token': server_config.get('report_token', '') or '',
             }
         except Exception as e:
             logger.error(f"加载配置文件失败: {e}")
@@ -112,7 +115,7 @@ def load_client_configs():
             client_configs = json.load(f)
         
         for config in client_configs:
-            existing_client = Client.query.get(config['id'])
+            existing_client = db.session.get(Client, config['id'])
             if existing_client:
                 # 更新现有客户端的配置信息（仅更新管理员设置的字段）
                 existing_client.physical_address = config.get('physical_address')
@@ -144,10 +147,25 @@ def load_client_configs():
 # 加载配置
 config = load_config()
 
+# ─── SECRET_KEY 启动校验 ──────────────────────────────────────────────
+# 测试环境(FLASK_TESTING_DB 已设)允许默认 key 通过,生产必须显式设置
+INSECURE_DEFAULT_KEYS = {'dev_key_change_in_production', '', None}
+_is_testing = bool(os.environ.get('FLASK_TESTING_DB'))
+if not _is_testing and config['secret_key'] in INSECURE_DEFAULT_KEYS:
+    raise RuntimeError(
+        "\n  ❌ SECRET_KEY 不能使用默认值!\n"
+        "  生成一个强随机 key:\n"
+        "    python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+        "  然后写入 /etc/system-monitor/server/server.conf 的 [server] secret_key = ...\n"
+        "  或设置环境变量 SECRET_KEY=...\n"
+    )
+
 # 配置Flask应用
 app = Flask(__name__)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = config['secret_key']  # 用于session
+# 上传文件大小上限(防止恶意大文件 DoS)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
 # 测试时可通过环境变量覆盖为 sqlite:///:memory:
 _test_db = os.environ.get('FLASK_TESTING_DB')
@@ -159,15 +177,41 @@ else:
 
 db = SQLAlchemy(app)
 
+# 服务端期望的最低客户端版本(用于 dashboard 标识"待升级"机器)
+EXPECTED_CLIENT_VERSION = '0426-1'
+
+# ─── 速率限制 ──────────────────────────────────────────────────────────
+from flask_limiter import Limiter  # noqa: E402
+from flask_limiter.util import get_remote_address  # noqa: E402
+
+# 测试环境关掉 rate limit,免得测试套件互相打架
+_limiter_enabled = not _is_testing
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["1000 per hour"],          # 全局兜底
+    storage_uri="memory://",                    # 单进程足够;多 worker 改 redis
+    enabled=_limiter_enabled,
+)
+
+# ─── CSRF 保护 ────────────────────────────────────────────────────────
+from flask_wtf.csrf import CSRFProtect  # noqa: E402
+
+# 测试环境关掉 CSRF,生产强制
+app.config['WTF_CSRF_ENABLED'] = not _is_testing
+csrf = CSRFProtect(app)
+
 # 数据模型
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-    
+    must_change_password = db.Column(db.Boolean, default=False)  # 首次登录强制改密
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
-        
+        self.must_change_password = False
+
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
@@ -181,6 +225,7 @@ class Client(db.Model):
     platform = db.Column(db.String(200))  # 系统平台信息
     last_seen = db.Column(db.DateTime)  # 最后一次上报时间
     display_order = db.Column(db.Integer, default=0)  # 显示顺序
+    client_version = db.Column(db.String(40))  # 客户端版本(用于识别待升级机器)
 
 class Announcement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -228,25 +273,56 @@ def init_db():
             conn.commit()
     except Exception:
         pass  # 如果列已存在则忽略错误
+
+    # 添加client_version列(用于识别待升级机器)
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(db.text('ALTER TABLE client ADD COLUMN client_version VARCHAR(40)'))
+            conn.commit()
+    except Exception:
+        pass
     
-    # 创建默认管理员账户
+    # idempotent ALTER 给老库加 must_change_password 列
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(db.text(
+                'ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0'))
+            conn.commit()
+    except Exception:
+        pass
+
+    # 创建默认管理员账户(标记为必须改密)
     if not User.query.filter_by(username='admin').first():
         admin = User(username='admin')
-        admin.set_password('admin')  # 默认密码，生产环境中应修改
+        admin.set_password('admin')   # 默认密码,首次登录强制更换
+        admin.must_change_password = True
         db.session.add(admin)
         db.session.commit()
-        logger.info("Created default admin user")
+        logger.info("Created default admin user (must change password on first login)")
     
     # 从配置文件加载客户端配置
     load_client_configs()
 
 @app.route('/report', methods=['POST'])
+@csrf.exempt  # 机器对机器调用,有自己的 token 鉴权,不走浏览器 CSRF
+@limiter.limit("60 per minute")  # 单 IP 每分钟最多 60 次,防爆量
 def report():
     """接收客户端上报的数据"""
+    # ── /report token 校验(若 server.conf 配了 report_token 就强制) ──
+    expected_token = config.get('report_token', '')
+    if expected_token:
+        auth = request.headers.get('Authorization', '')
+        token = (auth.removeprefix('Bearer ').strip()
+                 if auth.startswith('Bearer ') else
+                 request.headers.get('X-Report-Token', ''))
+        if not token or token != expected_token:
+            logger.warning(f"/report 鉴权失败 from {request.remote_addr}")
+            return jsonify({'error': 'unauthorized'}), 401
+
     data = request.json
     
     # 获取或创建客户端记录
-    client = Client.query.get(data['client_id'])
+    client = db.session.get(Client, data['client_id'])
     is_new_client = client is None
     if is_new_client:
         # 获取最大显示顺序
@@ -268,6 +344,9 @@ def report():
     client.ip_address = data['ip_address']
     client.platform = data['platform']
     client.last_seen = datetime.now()
+    # 老客户端不发 client_version,沿用旧值;新客户端会覆写
+    if data.get('client_version'):
+        client.client_version = data['client_version']
 
     # 保留上次各 GPU 正常读数时间(用于 dashboard 显示)
     existing_rt = client_realtime_data.get(data['client_id'], {})
@@ -390,7 +469,8 @@ def dashboard():
                 'disks': filtered_disks,
                 'gpu': gpu_list,
                 'uptime': uptime_str,
-                'display_order': client.display_order
+                'display_order': client.display_order,
+                'client_version': client.client_version,
             })
         else:
             # 没有实时数据的客户端，显示为离线
@@ -409,7 +489,8 @@ def dashboard():
                 'disks': [],
                 'gpu': [],
                 'uptime': '未知',
-                'display_order': client.display_order
+                'display_order': client.display_order,
+                'client_version': client.client_version,
             })
     
     # 查询所有客户端最近 30 天的可用性记录
@@ -431,7 +512,10 @@ def dashboard():
     # 获取公告
     announcements = Announcement.query.filter_by(is_active=True).order_by(Announcement.priority.desc(), Announcement.created_at.desc()).all()
 
-    return render_template('dashboard.html', clients=client_data, is_admin=session.get('logged_in', False), announcements=announcements)
+    return render_template('dashboard.html', clients=client_data,
+                           is_admin=session.get('logged_in', False),
+                           announcements=announcements,
+                           expected_client_version=EXPECTED_CLIENT_VERSION)
 
 @app.route('/reorder', methods=['GET', 'POST'])
 @login_required
@@ -443,7 +527,7 @@ def reorder_clients():
         
         # 更新数据库中的顺序
         for i, client_id in enumerate(client_ids):
-            client = Client.query.get(client_id)
+            client = db.session.get(Client, client_id)
             if client:
                 client.display_order = i
         
@@ -476,6 +560,8 @@ def reorder_clients():
     return render_template('reorder_clients.html', clients=client_data)
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("8 per minute; 30 per hour", methods=['POST'],
+               error_message="登录尝试过于频繁,请稍后再试")
 def login():
     """管理员登录页面"""
     error = None
@@ -487,7 +573,11 @@ def login():
         if user and user.check_password(password):
             session['logged_in'] = True
             session['username'] = username
+            session['must_change_password'] = bool(user.must_change_password)
             logger.info(f"Admin login successful: {username}")
+            if user.must_change_password:
+                flash('使用默认密码登录,请立即修改', 'warning')
+                return redirect(url_for('settings'))
             return redirect(url_for('dashboard'))
         else:
             error = '用户名或密码错误'
@@ -604,7 +694,7 @@ def manage_announcements():
         elif action == 'toggle':
             # 切换公告状态
             announcement_id = request.form.get('announcement_id')
-            announcement = Announcement.query.get(announcement_id)
+            announcement = db.session.get(Announcement, announcement_id)
             if announcement:
                 announcement.is_active = not announcement.is_active
                 db.session.commit()
@@ -613,7 +703,7 @@ def manage_announcements():
         elif action == 'delete':
             # 删除公告
             announcement_id = request.form.get('announcement_id')
-            announcement = Announcement.query.get(announcement_id)
+            announcement = db.session.get(Announcement, announcement_id)
             if announcement:
                 db.session.delete(announcement)
                 db.session.commit()
@@ -659,8 +749,9 @@ def settings():
             
         user = User.query.filter_by(username=session['username']).first()
         if user and user.check_password(current_password):
-            user.set_password(new_password)
+            user.set_password(new_password)  # set_password 会自动清 must_change_password
             db.session.commit()
+            session.pop('must_change_password', None)
             flash('密码已成功更新', 'success')
             logger.info(f"Password changed for user: {user.username}")
         else:

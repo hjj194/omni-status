@@ -50,7 +50,18 @@ def client(app):
 
 
 @pytest.fixture
-def logged_in_client(client):
+def logged_in_client(app, client):
+    """登录后的 admin client。
+
+    默认场景:admin 已经"完成首次改密",可以访问所有路径。
+    专门测"强制改密"流程的测试不要用这个 fixture,直接 client.post('/login',...)。
+    """
+    with app.app_context():
+        from server import User
+        admin = User.query.filter_by(username='admin').first()
+        if admin and admin.must_change_password:
+            admin.must_change_password = False
+            db.session.commit()
     client.post('/login',
                 data={'username': 'admin', 'password': 'admin'},
                 follow_redirects=True)
@@ -63,12 +74,16 @@ def clean_db(app):
     yield
     with app.app_context():
         from gpu_report import GpuHourlyUsage, LlmReport
-        from server import Client, Announcement, UptimeRecord, client_realtime_data
+        from server import Client, Announcement, UptimeRecord, client_realtime_data, User
         GpuHourlyUsage.query.delete()
         LlmReport.query.delete()
         Client.query.delete()
         Announcement.query.delete()
         UptimeRecord.query.delete()
+        # 还原 admin must_change_password = True,保证下个测试隔离
+        admin = User.query.filter_by(username='admin').first()
+        if admin:
+            admin.must_change_password = True
         db.session.commit()
         client_realtime_data.clear()
 

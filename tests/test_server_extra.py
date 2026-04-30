@@ -38,10 +38,10 @@ def test_reorder_post(app, logged_in_client):
                                  data={'client_ids[]': ['reorder-b', 'reorder-a']},
                                  follow_redirects=True)
     assert resp.status_code == 200
-    from server import Client
+    from server import Client, db
     with app.app_context():
-        a = Client.query.get('reorder-a')
-        b = Client.query.get('reorder-b')
+        a = db.session.get(Client, 'reorder-a')
+        b = db.session.get(Client, 'reorder-b')
     assert b.display_order < a.display_order
 
 
@@ -58,7 +58,7 @@ def test_announcement_toggle(logged_in_client, app):
                                  follow_redirects=True)
     assert resp.status_code == 200
     with app.app_context():
-        toggled = Announcement.query.get(aid)
+        toggled = db.session.get(Announcement, aid)
     assert toggled.is_active is False
 
 
@@ -75,7 +75,7 @@ def test_announcement_delete(logged_in_client, app):
                                  follow_redirects=True)
     assert resp.status_code == 200
     with app.app_context():
-        gone = Announcement.query.get(aid)
+        gone = db.session.get(Announcement, aid)
     assert gone is None
 
 
@@ -103,7 +103,7 @@ def test_edit_announcement_post(logged_in_client, app):
                           data={'title': 'New', 'content': 'new content', 'priority': '3'},
                           follow_redirects=True)
     with app.app_context():
-        updated = Announcement.query.get(aid)
+        updated = db.session.get(Announcement, aid)
     assert updated.title == 'New'
     assert updated.priority == 3
 
@@ -145,9 +145,9 @@ def test_delete_client_logged_in(logged_in_client, app):
     report(logged_in_client, 'del-cl-x')
     resp = logged_in_client.post('/delete_client/del-cl-x', follow_redirects=True)
     assert resp.status_code == 200
-    from server import Client
+    from server import Client, db
     with app.app_context():
-        assert Client.query.get('del-cl-x') is None
+        assert db.session.get(Client, 'del-cl-x') is None
 
 
 def test_import_config_logged_in(logged_in_client):

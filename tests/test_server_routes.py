@@ -27,7 +27,13 @@ def report(client, client_id='srv-rt', gpus=None):
                        content_type='application/json')
 
 
-def test_login_success_redirects_to_dashboard(client):
+def test_login_success_redirects_to_dashboard(app, client):
+    """正常登录(密码已改)应跳到 dashboard。"""
+    from server import User, db
+    with app.app_context():
+        admin = User.query.filter_by(username='admin').first()
+        admin.must_change_password = False
+        db.session.commit()
     resp = client.post('/login',
                        data={'username': 'admin', 'password': 'admin'},
                        follow_redirects=True)
@@ -76,9 +82,9 @@ def test_edit_client_post(app, logged_in_client):
                                        'notes': 'Test note'},
                                  follow_redirects=True)
     assert resp.status_code == 200
-    from server import Client
+    from server import Client, db
     with app.app_context():
-        c = Client.query.get('edit-cli-2')
+        c = db.session.get(Client, 'edit-cli-2')
         assert c.display_name == 'My Server'
 
 

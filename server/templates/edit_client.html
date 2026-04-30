@@ -59,6 +59,7 @@
                         </div>
                         <div class="card-body">
                             <form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <div class="mb-3">
                                     <label for="hostname" class="form-label">主机名</label>
                                     <input type="text" class="form-control" id="hostname" value="{{ client.hostname }}" disabled>

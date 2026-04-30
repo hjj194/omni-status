@@ -771,7 +771,7 @@ def get_longterm_idle():
         if vram_avg >= vram_threshold or low_hours < hours_required:
             continue
 
-        client = Client.query.get(cid)
+        client = db.session.get(Client, cid)
         if not client:
             continue
         result.append({
@@ -800,7 +800,7 @@ def get_error_gpus():
 
     result = []
     for (cid, gidx), rlist in grouped.items():
-        client = Client.query.get(cid)
+        client = db.session.get(Client, cid)
         if not client:
             continue
         total_err = sum(r.error_count or 0 for r in rlist)
@@ -874,7 +874,7 @@ def get_machine_detail(client_id, gpu_index=None, days=7):
     Returns hourly series suitable for SVG line-chart rendering, plus
     per-GPU breakdown and aggregate statistics.
     """
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return None
 

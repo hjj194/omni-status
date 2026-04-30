@@ -19,7 +19,7 @@ def ingest(app):
     hour = datetime(2026, 4, 24, 14, 0, 0)
 
     with app.app_context():
-        if not Client.query.get('client-001'):
+        if not db.session.get(Client, 'client-001'):
             c = Client(id='client-001', hostname='test-host', ip_address='10.0.0.1',
                        display_name='test', platform='linux', display_order=0)
             db.session.add(c)
@@ -151,7 +151,7 @@ def test_hour_bucket_truncation(app):
     gpu = make_ok_gpu(util=10.0, mem_used=2000.0)
 
     with app.app_context():
-        if not Client.query.get('client-ts'):
+        if not db.session.get(Client, 'client-ts'):
             c = Client(id='client-ts', hostname='ts-host', ip_address='10.0.0.2',
                        display_name='ts', platform='linux', display_order=99)
             db.session.add(c)
