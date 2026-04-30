@@ -1,0 +1,355 @@
+/* ===========================================================================
+   omni-status · Apple-inspired design system
+   ===========================================================================
+   Design tokens borrowed from macOS Sonoma System Settings, iOS 17 Health,
+   and Apple Human Interface Guidelines. All UI surfaces should reuse these
+   tokens rather than re-defining colors/spacing.
+   ========================================================================== */
+
+:root {
+    /* Surfaces */
+    --bg-page:   #F5F5F7;
+    --bg-card:   #FFFFFF;
+    --bg-subtle: #F9F9FB;
+    --bg-hover:  rgba(0, 0, 0, 0.025);
+
+    /* Text */
+    --text-primary:    #1D1D1F;
+    --text-secondary:  #6E6E73;
+    --text-tertiary:   #86868B;
+    --text-quaternary: #C7C7CC;
+
+    /* Separators */
+    --separator:        rgba(60, 60, 67, 0.10);
+    --separator-strong: rgba(60, 60, 67, 0.18);
+
+    /* Brand / accent */
+    --accent:        #0071E3;
+    --accent-hover:  #0077ED;
+    --accent-bg:     rgba(0, 113, 227, 0.08);
+
+    /* Status (Apple system colors, slightly muted) */
+    --status-low:    #34C759;
+    --status-low-bg: #E5F8E9;
+    --status-mid:    #FF9500;
+    --status-mid-bg: #FFF1DD;
+    --status-high:   #FF3B30;
+    --status-high-bg:#FFE5E2;
+    --status-error:  #8E8E93;
+    --status-nodata: #F2F2F7;
+
+    /* Elevation */
+    --shadow-sm:    0 0 0 1px rgba(60, 60, 67, 0.06);
+    --shadow-md:    0 1px 3px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(60, 60, 67, 0.06);
+    --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(60, 60, 67, 0.08);
+
+    /* Radii */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 18px;
+
+    /* Motion */
+    --ease: cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+
+/* ─── Base typography ────────────────────────────────────────────────── */
+
+* {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                 "SF Pro Text", "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-feature-settings: "tnum" 1, "ss01" 1;
+    background: var(--bg-page);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+/* ─── Top bar (frosted) ──────────────────────────────────────────────── */
+
+.top-bar {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid var(--separator);
+    padding: 14px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.top-bar .brand {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.top-bar .brand:hover { color: var(--accent); }
+.top-bar .nav-actions { display: flex; gap: 8px; }
+.top-bar .nav-link {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: all 0.15s var(--ease);
+}
+.top-bar .nav-link:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.top-bar .nav-link.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+}
+
+/* ─── Page layout ────────────────────────────────────────────────────── */
+
+.page {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+}
+.page-eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    margin-bottom: 6px;
+}
+.page-title {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin: 0 0 4px 0;
+}
+.page-subtitle {
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin: 0 0 32px;
+}
+
+/* ─── Panel / Card ───────────────────────────────────────────────────── */
+
+.panel {
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 20px;
+    overflow: hidden;
+}
+.panel-header {
+    padding: 18px 22px 12px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.panel-eyebrow {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-tertiary);
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+.panel-title {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 0;
+}
+.panel-action {
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    transition: background 0.15s var(--ease);
+}
+.panel-action:hover { background: var(--accent-bg); }
+.panel-body { padding: 4px 22px 22px; }
+.panel-body.flush { padding: 0; }
+
+/* ─── Tile (data summary cards) ──────────────────────────────────────── */
+
+.tile-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+}
+@media (max-width: 768px) {
+    .tile-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.tile {
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: 16px 18px;
+    transition: box-shadow 0.2s var(--ease);
+}
+.tile:hover { box-shadow: var(--shadow-hover); }
+.tile .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+.tile .value {
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.tile .value .total {
+    font-size: 14px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+    margin-left: 2px;
+}
+.tile.accent-positive .value { color: var(--status-low); }
+.tile.accent-negative .value { color: var(--status-high); }
+.tile.accent-warning  .value { color: var(--status-mid); }
+
+/* ─── Tables ─────────────────────────────────────────────────────────── */
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+.data-table thead th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    font-weight: 600;
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--separator);
+    background: var(--bg-subtle);
+}
+.data-table thead th.num { text-align: right; }
+.data-table tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--separator);
+    color: var(--text-primary);
+}
+.data-table tbody td.num { text-align: right; }
+.data-table tbody td.muted { color: var(--text-secondary); }
+.data-table tbody tr:hover { background: var(--bg-hover); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+
+/* ─── Badges ─────────────────────────────────────────────────────────── */
+
+.app-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.app-badge-warn  { background: var(--status-mid-bg);  color: #8B5A00; }
+.app-badge-error { background: var(--status-high-bg); color: #A4231A; }
+.app-badge-low   { background: var(--status-low-bg);  color: #1A6A2C; }
+.app-badge-neutral { background: var(--bg-subtle); color: var(--text-secondary); }
+
+/* ─── Flash messages ─────────────────────────────────────────────────── */
+
+.flash {
+    padding: 12px 16px;
+    border-radius: var(--radius-md);
+    margin-bottom: 16px;
+    font-size: 13px;
+}
+.flash-success { background: var(--status-low-bg);  color: #1A6A2C; }
+.flash-danger  { background: var(--status-high-bg); color: #A4231A; }
+.flash-warning { background: var(--status-mid-bg);  color: #8B5A00; }
+.flash-info    { background: var(--accent-bg);     color: var(--accent); }
+
+/* ─── Misc utilities ─────────────────────────────────────────────────── */
+
+.empty-state {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    padding: 24px 0;
+    text-align: center;
+}
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ─── Buttons (Bootstrap override / Apple-flavored) ──────────────────── */
+
+.btn-app {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--separator);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+}
+.btn-app:hover {
+    background: var(--bg-hover);
+    border-color: var(--separator-strong);
+}
+.btn-app-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+.btn-app-primary:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    color: white;
+}
+.btn-app-danger {
+    color: var(--status-high);
+    border-color: var(--status-high-bg);
+}
+.btn-app-danger:hover {
+    background: var(--status-high-bg);
+    color: var(--status-high);
+}
+
+/* ─── Status dot ─────────────────────────────────────────────────────── */
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.status-dot.online  { background: var(--status-low); }
+.status-dot.offline { background: var(--status-high); }
+.status-dot.warn    { background: var(--status-mid); }

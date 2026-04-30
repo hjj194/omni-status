@@ -201,6 +201,15 @@ from flask_wtf.csrf import CSRFProtect  # noqa: E402
 app.config['WTF_CSRF_ENABLED'] = not _is_testing
 csrf = CSRFProtect(app)
 
+# ─── 数据库迁移 ──────────────────────────────────────────────────────
+# Flask-Migrate 让 schema 演进可追踪、可回滚。当前 init_db() 仍然是
+# 主入口(自带 idempotent ALTER 兜底);未来新增字段统一走:
+#   FLASK_APP=server.py flask db migrate -m "add foo column"
+#   FLASK_APP=server.py flask db upgrade
+from flask_migrate import Migrate  # noqa: E402
+migrate = Migrate(app, db, directory=os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'migrations'))
+
 # 数据模型
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
