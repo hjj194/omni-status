@@ -64,8 +64,10 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 
     {# 全局 flash 消息 5 秒自动关闭(只针对 success / info,警告类保留)#}
+    {# 提交按钮 loading 状态:防止重复点击,给用户反馈 #}
     <script>
       document.addEventListener('DOMContentLoaded', () => {
+        // Flash auto-dismiss
         setTimeout(() => {
           document.querySelectorAll('.flash-success, .flash-info').forEach(el => {
             el.style.transition = 'opacity 0.4s';
@@ -73,6 +75,19 @@
             setTimeout(() => el.remove(), 400);
           });
         }, 5000);
+
+        // Button loading state: add data-loading="true" to any submit button
+        // to enable spinner on click. Skip if form has no-loading class.
+        document.querySelectorAll('form:not(.no-loading)').forEach(form => {
+          form.addEventListener('submit', () => {
+            form.querySelectorAll('[type=submit]').forEach(btn => {
+              const label = btn.textContent.trim();
+              btn.disabled = true;
+              btn.innerHTML =
+                `<span class="spinner-border spinner-border-sm me-1" role="status"></span>${label}`;
+            });
+          });
+        });
       });
     </script>
 

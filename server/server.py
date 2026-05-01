@@ -312,6 +312,26 @@ def init_db():
     # 从配置文件加载客户端配置
     load_client_configs()
 
+@app.route('/healthz')
+def healthz():
+    """Kubernetes / systemd watchdog 健康探针。"""
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        return jsonify({'status': 'ok', 'db': 'ok'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'db': str(e)}), 503
+
+
+@app.route('/readyz')
+def readyz():
+    """就绪探针:已有客户端上报过 = 就绪。"""
+    try:
+        count = Client.query.count()
+        return jsonify({'status': 'ready', 'clients': count}), 200
+    except Exception as e:
+        return jsonify({'status': 'not_ready', 'error': str(e)}), 503
+
+
 @app.route('/report', methods=['POST'])
 @csrf.exempt  # 机器对机器调用,有自己的 token 鉴权,不走浏览器 CSRF
 @limiter.limit("60 per minute")  # 单 IP 每分钟最多 60 次,防爆量
