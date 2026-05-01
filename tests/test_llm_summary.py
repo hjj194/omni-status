@@ -112,9 +112,12 @@ def test_llm_summary_success_writes_ok_row(app, monkeypatch):
     from gpu_report import generate_llm_summary, LlmReport
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
 
+    mock_sdk = MagicMock()
     mock_resp = _mock_anthropic_response('**本周摘要**')
-    with patch('anthropic.Anthropic') as MockClient:
-        MockClient.return_value.messages.create.return_value = mock_resp
+    mock_sdk.messages.create.return_value = mock_resp
+
+    # Patch _build_llm_client (new layer after refactor)
+    with patch('gpu_report.llm_agent._build_llm_client', return_value=(mock_sdk, None)):
         with app.app_context():
             generate_llm_summary()
             row = LlmReport.query.order_by(LlmReport.generated_at.desc()).first()
@@ -129,8 +132,10 @@ def test_llm_summary_api_failure_writes_error_row(app, monkeypatch):
     from gpu_report import generate_llm_summary, LlmReport
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
 
-    with patch('anthropic.Anthropic') as MockClient:
-        MockClient.return_value.messages.create.side_effect = RuntimeError('API down')
+    mock_sdk = MagicMock()
+    mock_sdk.messages.create.side_effect = RuntimeError('API down')
+
+    with patch('gpu_report.llm_agent._build_llm_client', return_value=(mock_sdk, None)):
         with patch('time.sleep'):  # 不真的等重试间隔
             with app.app_context():
                 generate_llm_summary()

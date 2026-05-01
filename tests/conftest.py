@@ -86,6 +86,16 @@ def clean_db(app):
             admin.must_change_password = True
         db.session.commit()
         client_realtime_data.clear()
+        # Reset GPU_REPORT config to defaults to prevent state pollution between tests
+        from gpu_report.config import DEFAULT_CFG
+        app.config['GPU_REPORT'] = dict(DEFAULT_CFG)
+        app.config['GPU_REPORT'].update({
+            'retention_days': 7, 'idle_vram_threshold': 15,
+            'heatmap_low_threshold': 20, 'heatmap_high_threshold': 70,
+            'longterm_vram_threshold': 20, 'longterm_hours_required': 120,
+            'llm_model': 'claude-haiku-4-5-20251001', 'llm_report_retention': 12,
+            'llm_provider': 'anthropic', 'llm_api_key': '', 'llm_base_url': '',
+        })
 
 
 @pytest.fixture

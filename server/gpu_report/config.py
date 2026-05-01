@@ -27,7 +27,11 @@ DEFAULT_CFG = {
     'heatmap_high_threshold': 70,
     'longterm_vram_threshold': 20,
     'longterm_hours_required': 120,
+    # LLM 配置
+    'llm_provider': 'anthropic',         # 'anthropic' | 'openai'
+    'llm_base_url': '',                  # 留空则用 provider 默认;自建端点时填 http://host:port/v1
     'llm_model': 'claude-haiku-4-5-20251001',
+    'llm_api_key': '',                   # 留空则从环境变量读取;非空时存明文(管理员知情)
     'llm_schedule_cron': '0 9 * * 1',
     'llm_report_retention': 12,
     'uptime_record_retention_days': 90,
@@ -40,6 +44,16 @@ SETTING_BOUNDS = {
     'llm_report_retention':        (1, 100),
     'uptime_record_retention_days': (30, 730),
 }
+
+# 已知 Anthropic 模型列表(Anthropic 没有 /v1/models 端点)
+ANTHROPIC_KNOWN_MODELS = [
+    'claude-opus-4-7',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5-20251001',
+    'claude-3-5-sonnet-20241022',
+    'claude-3-5-haiku-20241022',
+    'claude-3-haiku-20240307',
+]
 
 
 def load_runtime_settings() -> dict:

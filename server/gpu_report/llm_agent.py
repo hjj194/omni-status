@@ -113,42 +113,95 @@ def build_llm_payload_with_period(now: datetime, cfg: dict):
     return payload, period_start, period_end
 
 
-def generate_llm_summary():
-    api_key = os.environ.get('ANTHROPIC_API_KEY')
+def _resolve_api_key(cfg: dict) -> str:
+    """API key 优先级: 环境变量 > admin 面板设置的值。"""
+    env_key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+    cfg_key = cfg.get('llm_api_key', '').strip()
+    return env_key or cfg_key
+
+
+def _build_llm_client(cfg: dict):
+    """根据 provider 构建 SDK 客户端,支持 anthropic 和 OpenAI 兼容端点。"""
+    api_key = _resolve_api_key(cfg)
     if not api_key:
-        logger.warning("ANTHROPIC_API_KEY 未设置,跳过 LLM 周报生成")
+        return None, "API Key 未配置(设置环境变量 ANTHROPIC_API_KEY 或在管理面板填写)"
+
+    provider = cfg.get('llm_provider', 'anthropic')
+    base_url = cfg.get('llm_base_url', '').strip() or None
+
+    try:
+        if provider == 'anthropic':
+            import anthropic
+            kwargs = {'api_key': api_key}
+            if base_url:
+                kwargs['base_url'] = base_url
+            return anthropic.Anthropic(**kwargs), None
+        else:
+            # OpenAI 兼容端点
+            from openai import OpenAI
+            kwargs = {'api_key': api_key}
+            if base_url:
+                kwargs['base_url'] = base_url
+            return OpenAI(**kwargs), None
+    except ImportError as e:
+        return None, f"缺少 SDK: {e}  (pip install anthropic 或 pip install openai)"
+
+
+def _call_llm(sdk_client, cfg: dict, messages: list, max_tokens: int = 800):
+    """统一调用接口,屏蔽 anthropic / openai SDK 差异。
+
+    返回 (content_str, input_tokens, output_tokens) 或抛出异常。
+    """
+    model = cfg.get('llm_model', 'claude-haiku-4-5-20251001')
+    provider = cfg.get('llm_provider', 'anthropic')
+
+    if provider == 'anthropic':
+        resp = sdk_client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=[{
+                "type": "text",
+                "text": _SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=messages,
+        )
+        content = "".join(b.text for b in resp.content if b.type == 'text')
+        return content, resp.usage.input_tokens, resp.usage.output_tokens
+    else:
+        # OpenAI 兼容:system message 放在 messages 头部
+        full_msgs = [{"role": "system", "content": _SYSTEM_PROMPT}] + messages
+        resp = sdk_client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=full_msgs,
+        )
+        content = resp.choices[0].message.content or ''
+        usage = getattr(resp, 'usage', None)
+        in_tok = getattr(usage, 'prompt_tokens', 0) if usage else 0
+        out_tok = getattr(usage, 'completion_tokens', 0) if usage else 0
+        return content, in_tok, out_tok
+
+
+def generate_llm_summary():
+    cfg = _get_cfg()
+    sdk_client, err = _build_llm_client(cfg)
+    if sdk_client is None:
+        logger.warning(f"跳过 LLM 周报生成: {err}")
         return
 
-    cfg = _get_cfg()
     payload, period_start_dt, period_end_dt = build_llm_payload_with_period(
         datetime.now(), cfg)
     payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
-
-    try:
-        import anthropic
-    except ImportError:
-        logger.warning("anthropic SDK 未安装,跳过 LLM 周报")
-        return
-
-    client = anthropic.Anthropic(api_key=api_key)
     last_err = None
 
     for attempt in range(3):
         try:
-            resp = client.messages.create(
-                model=cfg.get('llm_model', 'claude-haiku-4-5-20251001'),
-                max_tokens=800,
-                system=[{
-                    "type": "text",
-                    "text": _SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }],
-                messages=[{
-                    "role": "user",
-                    "content": f"请分析以下过去一周的 GPU 使用数据,生成中文周报。\n\n数据:\n{payload_json}",
-                }],
+            content, in_tok, out_tok = _call_llm(
+                sdk_client, cfg,
+                [{"role": "user",
+                  "content": f"请分析以下过去一周的 GPU 使用数据,生成中文周报。\n\n数据:\n{payload_json}"}],
             )
-            content = "".join(b.text for b in resp.content if b.type == 'text')
             db.session.add(LlmReport(
                 generated_at=datetime.now(),
                 period_start=period_start_dt,
@@ -156,11 +209,11 @@ def generate_llm_summary():
                 model=cfg.get('llm_model'),
                 status='ok',
                 content=content,
-                input_tokens=resp.usage.input_tokens,
-                output_tokens=resp.usage.output_tokens,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
             ))
             db.session.commit()
-            logger.info(f"LLM 周报生成成功 {resp.usage.input_tokens}in/{resp.usage.output_tokens}out")
+            logger.info(f"LLM 周报生成成功 {in_tok}in/{out_tok}out")
             return
         except Exception as e:
             last_err = e

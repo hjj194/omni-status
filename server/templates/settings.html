@@ -172,6 +172,109 @@
             </div>
         </div>
 
+        <!-- ─── LLM 摘要配置 ─────────────────────────────────────────── -->
+        {% set llm_cfg = retention %}
+        <div class="card mt-4" id="llm-config-card">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-robot settings-icon"></i>
+                    <h5 class="mb-0">LLM 摘要配置</h5>
+                </div>
+                <span id="llm-status-badge" class="badge bg-secondary">未测试</span>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info py-2 mb-3" style="font-size:13px;">
+                    <i class="bi bi-info-circle me-1"></i>
+                    API Key 优先级:环境变量 <code>ANTHROPIC_API_KEY</code> &gt; 管理面板设置值(明文存储)。
+                    建议生产环境使用环境变量;此处填写仅在无环境变量时生效。
+                </div>
+                <form id="llm-settings-form" action="{{ url_for('save_llm_settings') }}" method="post" class="no-loading">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label">API 提供商</label>
+                            <select class="form-select" name="llm_provider" id="llm_provider" onchange="updateProviderUI()">
+                                <option value="anthropic" {% if (retention.llm_provider | default('anthropic')) == 'anthropic' %}selected{% endif %}>Anthropic</option>
+                                <option value="openai" {% if retention.llm_provider == 'openai' %}selected{% endif %}>OpenAI 兼容</option>
+                            </select>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label">
+                                API Base URL
+                                <small class="text-muted">(留空使用默认)</small>
+                            </label>
+                            <input type="url" class="form-control" name="llm_base_url" id="llm_base_url"
+                                   placeholder="https://api.anthropic.com  或自建端点"
+                                   value="{{ retention.llm_base_url | default('') }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">生成周期 (cron)</label>
+                            <input type="text" class="form-control font-monospace" name="llm_schedule_cron"
+                                   placeholder="0 9 * * 1"
+                                   value="{{ retention.llm_schedule_cron | default('0 9 * * 1') }}">
+                            <div class="form-text">当前:周一 09:00 自动生成</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">
+                                模型
+                                <button type="button" class="btn btn-sm btn-link p-0 ms-1"
+                                        onclick="detectModels()" id="detect-models-btn">
+                                    <i class="bi bi-search"></i> 检测可用模型
+                                </button>
+                            </label>
+                            <div class="input-group">
+                                <input type="text" class="form-control font-monospace" name="llm_model" id="llm_model"
+                                       value="{{ retention.llm_model | default('claude-haiku-4-5-20251001') }}">
+                                <button type="button" class="btn btn-outline-secondary dropdown-toggle"
+                                        data-bs-toggle="dropdown" id="model-dropdown-btn">
+                                    <span id="model-dropdown-label">选择</span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end" id="model-dropdown" style="max-height:260px;overflow-y:auto;">
+                                    <li><span class="dropdown-item text-muted" style="font-size:12px;">点击"检测"后可见</span></li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">
+                                API Key
+                                {% if retention.api_key_from_env %}
+                                <span class="badge bg-success ms-1" title="当前正在使用环境变量">来自 ENV</span>
+                                {% elif retention.api_key_stored %}
+                                <span class="badge bg-warning text-dark ms-1">已存储</span>
+                                {% else %}
+                                <span class="badge bg-secondary ms-1">未配置</span>
+                                {% endif %}
+                            </label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" name="llm_api_key"
+                                       placeholder="{% if retention.api_key_from_env %}来自环境变量,无需填写{% elif retention.api_key_stored %}••••••••(已存储){% else %}sk-ant-...{% endif %}"
+                                       autocomplete="off">
+                                {% if retention.api_key_stored %}
+                                <button type="submit" name="clear_api_key" value="1"
+                                        class="btn btn-outline-danger"
+                                        onclick="return confirm('确定清除已存储的 API Key?(不影响环境变量)')">
+                                    <i class="bi bi-x"></i>
+                                </button>
+                                {% endif %}
+                            </div>
+                            <div class="form-text">留空 = 不修改当前值</div>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2 mt-3 align-items-center">
+                        <button type="button" class="btn btn-outline-primary" onclick="testConnection()">
+                            <i class="bi bi-plug"></i> 测试连接
+                        </button>
+                        <div id="llm-test-result" class="small text-muted"></div>
+                        <div class="ms-auto">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg me-1"></i> 保存 LLM 配置
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- ─── 数据保留策略 ─────────────────────────────────────────── -->
         <div class="card mt-4">
             <div class="card-header d-flex align-items-center">
@@ -568,4 +671,83 @@
         </form>
       </div>
     </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function updateProviderUI() {
+  const provider = document.getElementById('llm_provider').value;
+  const urlInput = document.getElementById('llm_base_url');
+  urlInput.placeholder = provider === 'anthropic'
+    ? 'https://api.anthropic.com  (留空使用默认)'
+    : 'http://localhost:11434/v1  或其他 OpenAI 兼容端点';
+}
+
+async function detectModels() {
+  const btn = document.getElementById('detect-models-btn');
+  const dd = document.getElementById('model-dropdown');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 检测中';
+  try {
+    const res = await fetch('/settings/llm_models');
+    const data = await res.json();
+    dd.innerHTML = '';
+    if (data.ok && data.models.length) {
+      data.models.forEach(m => {
+        const li = document.createElement('li');
+        li.innerHTML = `<a class="dropdown-item font-monospace" style="font-size:12px;"
+          href="#" onclick="event.preventDefault();document.getElementById('llm_model').value='${m}'">${m}</a>`;
+        dd.appendChild(li);
+      });
+      document.getElementById('model-dropdown-label').textContent = '▾';
+    } else {
+      dd.innerHTML = `<li><span class="dropdown-item text-danger small">${data.error||'无可用模型'}</span></li>`;
+    }
+  } catch(e) {
+    dd.innerHTML = `<li><span class="dropdown-item text-danger small">请求失败: ${e}</span></li>`;
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-search"></i> 检测可用模型';
+  document.getElementById('model-dropdown-btn').click();
+}
+
+async function testConnection() {
+  const resultEl = document.getElementById('llm-test-result');
+  const badge    = document.getElementById('llm-status-badge');
+  const form     = document.getElementById('llm-settings-form');
+  resultEl.textContent = '⏳ 测试中...';
+  badge.className = 'badge bg-secondary';
+  badge.textContent = '测试中';
+  const csrfToken = document.querySelector('[name=csrf_token]').value;
+  const payload = {
+    llm_provider: form.llm_provider.value,
+    llm_model:    form.llm_model.value,
+    llm_base_url: form.llm_base_url.value,
+    llm_api_key:  form.llm_api_key.value,
+  };
+  try {
+    const res = await fetch('/settings/test_llm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      badge.className = 'badge bg-success';
+      badge.textContent = '✓ 连通';
+      resultEl.innerHTML = `✓ <b>${data.model}</b> · ${data.latency_ms}ms · 回应: "${data.response}" · ${data.input_tokens}in/${data.output_tokens}out tokens`;
+    } else {
+      badge.className = 'badge bg-danger';
+      badge.textContent = '✗ 失败';
+      resultEl.innerHTML = `✗ ${data.error} (${data.latency_ms||0}ms)`;
+    }
+  } catch(e) {
+    badge.className = 'badge bg-danger';
+    badge.textContent = '✗ 失败';
+    resultEl.textContent = `✗ 请求异常: ${e}`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', updateProviderUI);
+</script>
 {% endblock %}

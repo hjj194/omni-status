@@ -812,6 +812,14 @@ def settings():
         'llm_report_count': cfg.get('llm_report_retention', 12),
         'uptime_days': cfg.get('uptime_record_retention_days', 90),
         'bounds': SETTING_BOUNDS,
+        # LLM 配置字段
+        'llm_provider':       cfg.get('llm_provider', 'anthropic'),
+        'llm_base_url':       cfg.get('llm_base_url', ''),
+        'llm_model':          cfg.get('llm_model', 'claude-haiku-4-5-20251001'),
+        'llm_schedule_cron':  cfg.get('llm_schedule_cron', '0 9 * * 1'),
+        # API key 来源状态(给模板显示标签)
+        'api_key_from_env':   bool(os.environ.get('ANTHROPIC_API_KEY', '').strip()),
+        'api_key_stored':     bool(cfg.get('llm_api_key', '').strip()),
     }
 
     return render_template('settings.html',
@@ -919,6 +927,107 @@ def admin_cleanup_log_backups():
     flash(f'清理完成:删除 {res["deleted_count"]} 个轮转日志文件,释放 '
           f'{res["bytes_freed"] / 1024:.1f} KB', 'success')
     return redirect(url_for('settings'))
+
+
+@app.route('/settings/save_llm', methods=['POST'])
+@login_required
+def save_llm_settings():
+    """保存 LLM 配置(provider / model / base_url / api_key / cron)。"""
+    from gpu_report import save_runtime_settings
+    updates = {}
+
+    provider = request.form.get('llm_provider', '').strip()
+    if provider in ('anthropic', 'openai'):
+        updates['llm_provider'] = provider
+
+    for field in ('llm_model', 'llm_base_url', 'llm_schedule_cron'):
+        val = request.form.get(field, '').strip()
+        if val:
+            updates[field] = val
+
+    # API key:仅在用户主动修改时才存(空提交表示"保持不变")
+    api_key = request.form.get('llm_api_key', '').strip()
+    if api_key:
+        if api_key == '(env)':
+            pass  # 占位符,用户没改,不更新
+        else:
+            updates['llm_api_key'] = api_key
+    clear_key = request.form.get('clear_api_key')
+    if clear_key:
+        updates['llm_api_key'] = ''
+
+    if updates:
+        save_runtime_settings(updates, app=app)
+        flash(f'LLM 配置已保存', 'success')
+    else:
+        flash('未检测到变化', 'info')
+    return redirect(url_for('settings'))
+
+
+@app.route('/settings/test_llm', methods=['POST'])
+@login_required
+def test_llm_connection():
+    """测试 LLM API 连通性,返回 JSON。"""
+    import time as _time
+    from gpu_report.llm_agent import _build_llm_client, _call_llm
+    from gpu_report.config import _get_cfg
+
+    cfg = _get_cfg()
+    # 允许前端临时覆盖(测试前填写但未保存)
+    for field in ('llm_provider', 'llm_model', 'llm_base_url', 'llm_api_key'):
+        val = request.json.get(field, '').strip() if request.is_json else ''
+        if val and val != '(env)':
+            cfg = {**cfg, field: val}
+
+    sdk_client, err = _build_llm_client(cfg)
+    if sdk_client is None:
+        return jsonify({'ok': False, 'error': err}), 200
+
+    t0 = _time.time()
+    try:
+        content, in_tok, out_tok = _call_llm(
+            sdk_client, cfg,
+            [{"role": "user", "content": "Reply with exactly: OK"}],
+            max_tokens=20,
+        )
+        latency_ms = int((_time.time() - t0) * 1000)
+        return jsonify({
+            'ok': True,
+            'model': cfg.get('llm_model'),
+            'response': content.strip()[:80],
+            'latency_ms': latency_ms,
+            'input_tokens': in_tok,
+            'output_tokens': out_tok,
+        })
+    except Exception as e:
+        latency_ms = int((_time.time() - t0) * 1000)
+        return jsonify({'ok': False, 'error': str(e), 'latency_ms': latency_ms})
+
+
+@app.route('/settings/llm_models')
+@login_required
+def list_llm_models():
+    """返回可用模型列表。Anthropic 用内置清单,OpenAI 兼容端点调 /v1/models。"""
+    from gpu_report.llm_agent import _build_llm_client
+    from gpu_report.config import _get_cfg, ANTHROPIC_KNOWN_MODELS
+
+    cfg = _get_cfg()
+    provider = cfg.get('llm_provider', 'anthropic')
+
+    if provider == 'anthropic':
+        return jsonify({'ok': True, 'models': ANTHROPIC_KNOWN_MODELS,
+                        'source': 'built-in list'})
+
+    # OpenAI-compatible: try /v1/models
+    sdk_client, err = _build_llm_client(cfg)
+    if sdk_client is None:
+        return jsonify({'ok': False, 'error': err})
+    try:
+        resp = sdk_client.models.list()
+        models = sorted([m.id for m in resp.data])
+        return jsonify({'ok': True, 'models': models, 'source': 'api'})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 
 @app.route('/settings/vacuum_db', methods=['POST'])
