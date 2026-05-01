@@ -33,11 +33,10 @@ def test_get_storage_stats_returns_expected_shape(app):
 # ─── Save retention ─────────────────────────────────────────────────────────
 
 def test_save_retention_persists_and_takes_effect(app, logged_in_client, tmp_path):
-    from gpu_report import RUNTIME_SETTINGS_FILE
-    # Use temp file for runtime settings to avoid polluting real one
-    import gpu_report as gr
-    orig_file = gr.RUNTIME_SETTINGS_FILE
-    gr.RUNTIME_SETTINGS_FILE = str(tmp_path / 'runtime.json')
+    # Patch the file path at the module where it's actually used
+    import gpu_report.config as gr_config
+    orig_file = gr_config.RUNTIME_SETTINGS_FILE
+    gr_config.RUNTIME_SETTINGS_FILE = str(tmp_path / 'runtime.json')
     try:
         resp = logged_in_client.post('/settings/save_retention', data={
             'gpu_hourly_days': '14',
@@ -53,17 +52,17 @@ def test_save_retention_persists_and_takes_effect(app, logged_in_client, tmp_pat
             assert app.config['GPU_REPORT']['uptime_record_retention_days'] == 180
 
         # Persisted to JSON file
-        with open(gr.RUNTIME_SETTINGS_FILE) as f:
+        with open(gr_config.RUNTIME_SETTINGS_FILE) as f:
             data = json.load(f)
         assert data['retention_days'] == 14
     finally:
-        gr.RUNTIME_SETTINGS_FILE = orig_file
+        gr_config.RUNTIME_SETTINGS_FILE = orig_file
 
 
 def test_save_retention_rejects_out_of_bounds(app, logged_in_client, tmp_path):
-    import gpu_report as gr
-    orig_file = gr.RUNTIME_SETTINGS_FILE
-    gr.RUNTIME_SETTINGS_FILE = str(tmp_path / 'runtime.json')
+    import gpu_report.config as gr_config
+    orig_file = gr_config.RUNTIME_SETTINGS_FILE
+    gr_config.RUNTIME_SETTINGS_FILE = str(tmp_path / 'runtime.json')
     try:
         resp = logged_in_client.post('/settings/save_retention', data={
             'gpu_hourly_days': '5000',  # > 365
@@ -73,20 +72,20 @@ def test_save_retention_rejects_out_of_bounds(app, logged_in_client, tmp_path):
         with app.app_context():
             assert app.config['GPU_REPORT']['retention_days'] != 5000
     finally:
-        gr.RUNTIME_SETTINGS_FILE = orig_file
+        gr_config.RUNTIME_SETTINGS_FILE = orig_file
 
 
 def test_save_retention_rejects_non_integer(logged_in_client, tmp_path):
-    import gpu_report as gr
-    orig_file = gr.RUNTIME_SETTINGS_FILE
-    gr.RUNTIME_SETTINGS_FILE = str(tmp_path / 'runtime.json')
+    import gpu_report.config as gr_config
+    orig_file = gr_config.RUNTIME_SETTINGS_FILE
+    gr_config.RUNTIME_SETTINGS_FILE = str(tmp_path / 'runtime.json')
     try:
         resp = logged_in_client.post('/settings/save_retention', data={
             'gpu_hourly_days': 'abc',
         }, follow_redirects=True)
         assert resp.status_code == 200
     finally:
-        gr.RUNTIME_SETTINGS_FILE = orig_file
+        gr_config.RUNTIME_SETTINGS_FILE = orig_file
 
 
 def test_save_retention_requires_login(client):
@@ -293,9 +292,9 @@ def test_import_db_requires_login(client):
 
 
 def test_import_runtime_settings_accepts_valid_json(app, logged_in_client, tmp_path):
-    import gpu_report as gr
-    orig = gr.RUNTIME_SETTINGS_FILE
-    gr.RUNTIME_SETTINGS_FILE = str(tmp_path / 'rt.json')
+    import gpu_report.config as gr_config
+    orig = gr_config.RUNTIME_SETTINGS_FILE
+    gr_config.RUNTIME_SETTINGS_FILE = str(tmp_path / 'rt.json')
     try:
         upload = tmp_path / 'imp.json'
         upload.write_text(json.dumps({
@@ -313,7 +312,7 @@ def test_import_runtime_settings_accepts_valid_json(app, logged_in_client, tmp_p
             assert app.config['GPU_REPORT']['retention_days'] == 21
             assert app.config['GPU_REPORT']['llm_report_retention'] == 30
     finally:
-        gr.RUNTIME_SETTINGS_FILE = orig
+        gr_config.RUNTIME_SETTINGS_FILE = orig
 
 
 def test_import_runtime_settings_rejects_invalid_json(logged_in_client, tmp_path):
@@ -328,9 +327,9 @@ def test_import_runtime_settings_rejects_invalid_json(logged_in_client, tmp_path
 
 
 def test_import_runtime_settings_rejects_out_of_bounds(app, logged_in_client, tmp_path):
-    import gpu_report as gr
-    orig = gr.RUNTIME_SETTINGS_FILE
-    gr.RUNTIME_SETTINGS_FILE = str(tmp_path / 'rt2.json')
+    import gpu_report.config as gr_config
+    orig = gr_config.RUNTIME_SETTINGS_FILE
+    gr_config.RUNTIME_SETTINGS_FILE = str(tmp_path / 'rt2.json')
     try:
         upload = tmp_path / 'imp.json'
         upload.write_text(json.dumps({
@@ -346,4 +345,4 @@ def test_import_runtime_settings_rejects_out_of_bounds(app, logged_in_client, tm
         with app.app_context():
             assert app.config['GPU_REPORT']['retention_days'] != 99999
     finally:
-        gr.RUNTIME_SETTINGS_FILE = orig
+        gr_config.RUNTIME_SETTINGS_FILE = orig
