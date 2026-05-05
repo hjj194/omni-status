@@ -115,12 +115,15 @@ def test_settings_password_change_success(logged_in_client, app):
                                        'confirm_password': 'newpass123'},
                                  follow_redirects=True)
     assert resp.status_code == 200
-    # reset password back
-    logged_in_client.post('/settings',
-                          data={'current_password': 'newpass123',
-                                'new_password': 'admin',
-                                'confirm_password': 'admin'},
-                          follow_redirects=True)
+    # 短密码（< 8 字符）应被拒绝
+    resp2 = logged_in_client.post('/settings',
+                                  data={'current_password': 'newpass123',
+                                        'new_password': 'admin',
+                                        'confirm_password': 'admin'},
+                                  follow_redirects=True)
+    assert resp2.status_code == 200
+    assert '至少 8 位' in resp2.data.decode()
+    # clean_db fixture 会在测试结束后将密码重置为 'admin'
 
 
 def test_settings_password_mismatch(logged_in_client):

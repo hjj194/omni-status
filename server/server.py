@@ -326,8 +326,8 @@ def healthz():
 def readyz():
     """就绪探针:已有客户端上报过 = 就绪。"""
     try:
-        count = Client.query.count()
-        return jsonify({'status': 'ready', 'clients': count}), 200
+        Client.query.count()
+        return jsonify({'status': 'ready'}), 200
     except Exception as e:
         return jsonify({'status': 'not_ready', 'error': str(e)}), 503
 
@@ -349,7 +349,15 @@ def report():
             return jsonify({'error': 'unauthorized'}), 401
 
     data = request.json
-    
+    if not data:
+        return jsonify({'error': 'missing JSON body'}), 400
+    required = ('client_id', 'hostname', 'ip_address', 'platform',
+                'timestamp', 'cpu', 'memory', 'disks', 'uptime_seconds')
+    missing = [f for f in required if f not in data]
+    if missing:
+        logger.warning(f"/report 缺少必需字段 {missing} from {request.remote_addr}")
+        return jsonify({'error': f'missing fields: {missing}'}), 400
+
     # 获取或创建客户端记录
     client = db.session.get(Client, data['client_id'])
     is_new_client = client is None
@@ -722,16 +730,22 @@ def manage_announcements():
                 
         elif action == 'toggle':
             # 切换公告状态
-            announcement_id = request.form.get('announcement_id')
+            try:
+                announcement_id = int(request.form.get('announcement_id', 0))
+            except (ValueError, TypeError):
+                announcement_id = 0
             announcement = db.session.get(Announcement, announcement_id)
             if announcement:
                 announcement.is_active = not announcement.is_active
                 db.session.commit()
                 flash(f'公告已{"启用" if announcement.is_active else "禁用"}', 'success')
-                
+
         elif action == 'delete':
             # 删除公告
-            announcement_id = request.form.get('announcement_id')
+            try:
+                announcement_id = int(request.form.get('announcement_id', 0))
+            except (ValueError, TypeError):
+                announcement_id = 0
             announcement = db.session.get(Announcement, announcement_id)
             if announcement:
                 db.session.delete(announcement)
@@ -772,6 +786,10 @@ def settings():
         new_password = request.form.get('new_password')
         confirm_password = request.form.get('confirm_password')
         
+        if not new_password or len(new_password) < 8:
+            flash('新密码不能为空且长度至少 8 位', 'danger')
+            return redirect(url_for('settings'))
+
         if new_password != confirm_password:
             flash('新密码和确认密码不匹配', 'danger')
             return redirect(url_for('settings'))
@@ -1173,11 +1191,10 @@ def import_db():
         # Sanity check: try to open uploaded file as SQLite and ensure required tables
         import sqlite3
         try:
-            conn = sqlite3.connect(tmp_path)
-            cur = conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            names = {r[0] for r in cur.fetchall()}
-            conn.close()
+            with sqlite3.connect(tmp_path) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                names = {r[0] for r in cur.fetchall()}
         except sqlite3.DatabaseError as e:
             os.remove(tmp_path)
             flash(f'文件不是合法 SQLite 数据库:{e}', 'danger')

@@ -83,7 +83,8 @@ def clean_db(app):
         # 还原 admin must_change_password = True,保证下个测试隔离
         admin = User.query.filter_by(username='admin').first()
         if admin:
-            admin.must_change_password = True
+            admin.set_password('admin')   # 重置密码；set_password 内部会把 must_change_password 设为 False
+            admin.must_change_password = True  # 必须在 set_password 之后再设，否则被覆盖
         db.session.commit()
         client_realtime_data.clear()
         # Reset GPU_REPORT config to defaults to prevent state pollution between tests

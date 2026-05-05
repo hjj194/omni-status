@@ -125,7 +125,7 @@
                                         </form>
                                     </div>
                                 </div>
-                                <p class="mb-2">{{ announcement.content|replace('\n', '<br>')|safe }}</p>
+                                <p class="mb-2">{{ announcement.content|e|replace('\n', '<br>')|safe }}</p>
                                 <small class="text-muted">
                                     创建时间: {{ announcement.created_at.strftime('%Y-%m-%d %H:%M') }}
                                     {% if announcement.updated_at != announcement.created_at %}

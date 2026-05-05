@@ -238,4 +238,4 @@ def render_markdown_safe(text: str) -> str:
     if not text:
         return ''
     html = _md.markdown(text, extensions=['extra'])
-    return bleach.clean(html, tags=_ALLOWED_TAGS, strip=True)
+    return bleach.clean(html, tags=_ALLOWED_TAGS, attributes={}, strip=True)

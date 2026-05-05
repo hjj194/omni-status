@@ -57,7 +57,11 @@ def report_page():
 @gpu_report_bp.route('/api/heatmap.json')
 @login_required
 def api_heatmap():
-    days = int(request.args.get('days', 7))
+    try:
+        days = int(request.args.get('days', 7))
+        days = max(1, min(days, 90))
+    except (ValueError, TypeError):
+        days = 7
     return jsonify(get_heatmap_data(days=days))
 
 
@@ -83,8 +87,11 @@ def detail_page(client_id, gpu_index=None):
 @gpu_report_bp.route('/api/detail/<client_id>/<int:gpu_index>.json')
 @login_required
 def api_detail(client_id, gpu_index=None):
-    detail = get_machine_detail(client_id, gpu_index=gpu_index,
-                                days=int(request.args.get('days', 7)))
+    try:
+        days = max(1, min(int(request.args.get('days', 7)), 90))
+    except (ValueError, TypeError):
+        days = 7
+    detail = get_machine_detail(client_id, gpu_index=gpu_index, days=days)
     if detail is None:
         return jsonify({'error': 'client not found'}), 404
     return jsonify(detail)

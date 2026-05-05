@@ -137,10 +137,14 @@ def get_nvidia_gpu_info():
             capture_output=True, text=True, check=True, timeout=5
         )
         _nvidia_available = True
-    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
-        if _nvidia_available is None:
-            logger.debug("未检测到NVIDIA GPU或nvidia-smi命令不可用")
+    except FileNotFoundError:
+        # nvidia-smi 不存在，永久标记（不可能自动出现）
         _nvidia_available = False
+        logger.debug("未检测到NVIDIA GPU或nvidia-smi命令不可用")
+        return []
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+        # 瞬时故障（驱动挂起/超时），不永久缓存，下次周期自动重试
+        logger.warning("nvidia-smi 临时异常，跳过本次采集，下次周期重试")
         return []
 
     gpus = []
@@ -172,32 +176,33 @@ def get_system_info(client_id):
     total_disk_space = 0
     total_disk_used = 0
     
-    for part in psutil.disk_partitions(all=False):
-        if os.name == 'nt' or part.fstype not in ('squashfs', 'tmpfs', 'devtmpfs'):
-            try:
-                # 带 3 秒超时，防止 NFS 等网络挂载点无响应时阻塞整个上报周期
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    # 线程池创建一次，避免每个分区都创建/销毁线程池的开销
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        for part in psutil.disk_partitions(all=False):
+            if os.name == 'nt' or part.fstype not in ('squashfs', 'tmpfs', 'devtmpfs'):
+                try:
+                    # 带 3 秒超时，防止 NFS 等网络挂载点无响应时阻塞整个上报周期
                     future = executor.submit(psutil.disk_usage, part.mountpoint)
                     usage = future.result(timeout=3)
 
-                total_disk_space += usage.total
-                total_disk_used += usage.used
+                    total_disk_space += usage.total
+                    total_disk_used += usage.used
 
-                # 只添加根目录的详细信息
-                if part.mountpoint == '/' or (os.name == 'nt' and part.mountpoint == 'C:\\'):
-                    disks.append({
-                        'device': part.device,
-                        'mountpoint': '/',  # 统一显示为根目录
-                        'total': usage.total,
-                        'used': usage.used,
-                        'percent': usage.percent
-                    })
-            except concurrent.futures.TimeoutError:
-                logger.warning(f"获取磁盘信息超时，跳过挂载点: {part.mountpoint}")
-            except PermissionError:
-                logger.warning(f"没有权限访问挂载点: {part.mountpoint}")
-            except Exception as e:
-                logger.warning(f"获取磁盘信息时出错 ({part.mountpoint}): {e}")
+                    # 只添加根目录的详细信息
+                    if part.mountpoint == '/' or (os.name == 'nt' and part.mountpoint == 'C:\\'):
+                        disks.append({
+                            'device': part.device,
+                            'mountpoint': '/',  # 统一显示为根目录
+                            'total': usage.total,
+                            'used': usage.used,
+                            'percent': usage.percent
+                        })
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"获取磁盘信息超时，跳过挂载点: {part.mountpoint}")
+                except PermissionError:
+                    logger.warning(f"没有权限访问挂载点: {part.mountpoint}")
+                except Exception as e:
+                    logger.warning(f"获取磁盘信息时出错 ({part.mountpoint}): {e}")
     
     # 添加总存储信息
     if total_disk_space > 0:
@@ -219,11 +224,9 @@ def get_system_info(client_id):
         ip_address = socket.gethostbyname(socket.gethostname())
         # 如果返回回环地址，尝试获取实际IP
         if ip_address.startswith('127.'):
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # 不需要实际连接
-            s.connect(('8.8.8.8', 1))
-            ip_address = s.getsockname()[0]
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(('8.8.8.8', 1))
+                ip_address = s.getsockname()[0]
     except Exception:
         ip_address = "127.0.0.1"  # 无法获取IP时的默认值
         logger.warning("无法获取主机IP地址，使用默认地址")

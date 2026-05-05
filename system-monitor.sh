@@ -15,7 +15,8 @@ NC='\033[0m' # No Color
 
 # 固定的 Git 仓库信息
 REPO_URL="https://github.com/hjj194/omni-status.git"
-REPO_BRANCH="main"
+REPO_BRANCH="${OMNI_BRANCH:-main}"   # 可用 OMNI_BRANCH=xxx bash system-monitor.sh 跳过交互直接指定分支
+BRANCH_SELECTED=false                # 防止同一次运行中重复提示
 
 # Configuration paths
 SERVER_INSTALL_DIR="/opt/system-monitor/server"
@@ -96,8 +97,77 @@ get_server_ip() {
     echo "$ip"
 }
 
+# Function to select install branch interactively
+select_branch() {
+    # 已选过，或用户通过环境变量指定，直接跳过
+    if [ "$BRANCH_SELECTED" = true ] || [ -n "${OMNI_BRANCH:-}" ]; then
+        BRANCH_SELECTED=true
+        return 0
+    fi
+
+    echo ""
+    print_message "info" "正在获取远程分支列表..."
+
+    local branches=()
+    local raw_output=""
+
+    # 先确保 git 可用（安装检测在 clone_repository 里做，这里静默尝试）
+    if command_exists git; then
+        raw_output=$(git ls-remote --heads "$REPO_URL" 2>/dev/null \
+            | awk -F'/' '{print $NF}' \
+            | sort) || raw_output=""
+    fi
+
+    if [ -n "$raw_output" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && branches+=("$line")
+        done <<< "$raw_output"
+
+        echo ""
+        echo -e "${CYAN}可用分支:${NC}"
+        local i=1
+        local default_idx=1
+        for branch in "${branches[@]}"; do
+            if [ "$branch" = "main" ]; then
+                echo -e "  $i) ${GREEN}$branch${NC}  ← 推荐"
+                default_idx=$i
+            else
+                echo "  $i) $branch"
+            fi
+            ((i++))
+        done
+        echo ""
+
+        local choice
+        read -p "请选择分支编号 [默认 $default_idx: ${branches[$((default_idx-1))]}]: " choice
+
+        if [ -z "$choice" ]; then
+            REPO_BRANCH="${branches[$((default_idx-1))]}"
+        elif [[ "$choice" =~ ^[0-9]+$ ]] \
+            && [ "$choice" -ge 1 ] \
+            && [ "$choice" -le "${#branches[@]}" ]; then
+            REPO_BRANCH="${branches[$((choice-1))]}"
+        else
+            print_message "warning" "无效输入，使用默认分支: ${branches[$((default_idx-1))]}"
+            REPO_BRANCH="${branches[$((default_idx-1))]}"
+        fi
+    else
+        # 网络不通或 git 未装时，退回手动输入
+        print_message "warning" "无法获取远程分支列表，请手动输入"
+        echo -e "  ${CYAN}常用分支: main, 0426${NC}"
+        read -p "请输入分支名 [默认: main]: " manual_branch
+        REPO_BRANCH="${manual_branch:-main}"
+    fi
+
+    BRANCH_SELECTED=true
+    print_message "success" "已选择分支: $REPO_BRANCH"
+    echo ""
+}
+
 # Function to clone the repository
 clone_repository() {
+    # 首次克隆前进行分支选择
+    select_branch
     print_message "info" "正在克隆仓库 $REPO_URL (分支: $REPO_BRANCH)..."
     
     # Make sure the temporary directory does not exist
@@ -199,10 +269,19 @@ install_server() {
     local port
     read -p "请输入服务器端口 [5000]: " port
     port=${port:-5000}
-    
+
+    # 是否启用客户端上报鉴权
+    echo ""
+    local report_token=""
+    read -p "是否启用客户端上报鉴权 (report_token)? (y/n) [n]: " enable_token
+    if [ "$enable_token" = "y" ]; then
+        report_token=$(openssl rand -hex 16)
+        print_message "success" "report_token 已生成"
+    fi
+
     # Generate random secret key
     local secret_key=$(openssl rand -hex 16)
-    
+
     # Create server configuration
     print_message "info" "创建服务器配置..."
     mkdir -p "$(dirname "$SERVER_CONFIG")"
@@ -211,9 +290,10 @@ install_server() {
 host = 0.0.0.0
 port = $port
 secret_key = $secret_key
+report_token = $report_token
 debug = false
 EOF
-    
+
     # Create systemd service
     print_message "info" "创建系统服务..."
     cat > "/etc/systemd/system/$SERVER_SERVICE.service" << EOF
@@ -256,13 +336,22 @@ EOF
     print_message "info" "服务器地址: http://$server_ip:$port"
     print_message "info" "默认管理员账户: admin / admin"
     print_message "warning" "请尽快登录并修改默认密码!"
-    echo ""
-    print_message "info" "新功能说明:"
-    print_message "info" "• 实时监控（无历史记录存储，节省存储空间）"
-    print_message "info" "• 资源状态颜色指示（绿-充裕，黄-中度，红-紧张）"
-    print_message "info" "• 公告管理功能（管理员可发布系统公告）"
-    print_message "info" "• 配置备份功能（客户端配置可导入导出）"
-    
+
+    if [ -n "$report_token" ]; then
+        echo ""
+        echo -e "${YELLOW}╔══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║          客户端上报鉴权 Token (report_token)         ║${NC}"
+        echo -e "${YELLOW}╠══════════════════════════════════════════════════════╣${NC}"
+        echo -e "${YELLOW}║  ${GREEN}${report_token}${YELLOW}  ║${NC}"
+        echo -e "${YELLOW}╠══════════════════════════════════════════════════════╣${NC}"
+        echo -e "${YELLOW}║  安装每台客户端时，在提示处粘贴此 Token             ║${NC}"
+        echo -e "${YELLOW}║  已保存至: $SERVER_CONFIG"
+        echo -e "${YELLOW}╚══════════════════════════════════════════════════════╝${NC}"
+    else
+        echo ""
+        print_message "info" "未启用 report_token（客户端无需鉴权即可上报）"
+    fi
+
     read -p "按回车键继续..."
 }
 
@@ -358,13 +447,20 @@ install_client() {
     local report_interval
     read -p "请输入上报间隔(秒) [60]: " report_interval
     report_interval=${report_interval:-60}
-    
-    # Create client configuration - 注意这里是直接在 /etc/system-monitor/client.conf 创建
+
+    # 可选：服务端鉴权 token
+    echo ""
+    local report_token=""
+    print_message "info" "若服务端安装时生成了 report_token，请在此粘贴；否则直接回车跳过"
+    read -p "report_token (留空跳过): " report_token
+
+    # Create client configuration
     print_message "info" "创建客户端配置..."
     cat > "$CLIENT_CONFIG" << EOF
 [server]
 url = $server_url
 report_interval = $report_interval
+report_token = $report_token
 EOF
     
     # 验证配置文件已创建

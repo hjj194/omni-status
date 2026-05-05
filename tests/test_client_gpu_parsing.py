@@ -115,4 +115,5 @@ def test_timeout_sets_unavailable():
     with patch('subprocess.run', side_effect=subprocess.TimeoutExpired('nvidia-smi', 5)):
         gpus = c.get_nvidia_gpu_info()
     assert gpus == []
-    assert c._nvidia_available is False
+    # 瞬时超时不永久禁用（None = 下次周期重试），只有 FileNotFoundError 才永久设 False
+    assert c._nvidia_available is None
