@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+import sys
+# 以 `python server.py` 启动时模块注册为 __main__，但 gpu_report/models.py 做
+# `from server import db` 时找不到 server，触发循环 import。
+# 提前将本模块注册为 'server'，让子包能安全地引用 db。
+if __name__ == '__main__':
+    sys.modules.setdefault('server', sys.modules['__main__'])
+
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash, send_file, Response
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, date as date_type
