@@ -177,6 +177,8 @@ migrate_server() {
     #   server_config.json  — 管理员面板写入的服务配置覆盖，gitignored
     #   __pycache__/        — 编译缓存，自动重建
     pm info "替换代码文件..."
+    # 清除 __pycache__，否则 rsync --delete 无法删除含缓存的目录（如 main→0426 的 gpu_report/ 切换）
+    find "$SERVER_INSTALL_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
     rsync -a --delete \
         --exclude='venv/' \
         --exclude='monitor.db' \
@@ -389,6 +391,8 @@ rollback_from() {
         pm info "回退服务端代码..."
         service_running "$SERVER_SERVICE" && systemctl stop "$SERVER_SERVICE"
 
+        # 清除 __pycache__，确保 rsync --delete 能正确删除跨版本目录结构变化的目录
+        find "$SERVER_INSTALL_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
         rsync -a --delete \
             --exclude='venv/' \
             --exclude='monitor.db' \
