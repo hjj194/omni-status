@@ -27,6 +27,10 @@
                    class="nav-link{% if request.blueprint == 'gpu_report' %} active{% endif %}">
                     <i class="bi bi-bar-chart-line"></i> GPU 报告
                 </a>
+                <a href="{{ url_for('reorder_clients') }}"
+                   class="nav-link{% if request.endpoint == 'reorder_clients' %} active{% endif %}">
+                    <i class="bi bi-list-ol"></i> 排序
+                </a>
                 <a href="{{ url_for('manage_announcements') }}"
                    class="nav-link{% if request.endpoint in ('manage_announcements', 'edit_announcement') %} active{% endif %}">
                     <i class="bi bi-megaphone"></i> 公告
