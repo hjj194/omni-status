@@ -358,8 +358,9 @@ def report():
     data = request.json
     if not data:
         return jsonify({'error': 'missing JSON body'}), 400
+    # 只校验绝对必需的字段；uptime_seconds / gpu 等字段老客户端可能不发，兼容处理
     required = ('client_id', 'hostname', 'ip_address', 'platform',
-                'timestamp', 'cpu', 'memory', 'disks', 'uptime_seconds')
+                'timestamp', 'cpu', 'memory', 'disks')
     missing = [f for f in required if f not in data]
     if missing:
         logger.warning(f"/report 缺少必需字段 {missing} from {request.remote_addr}")
