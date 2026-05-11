@@ -76,7 +76,7 @@ def build_llm_payload(now: datetime, cfg: dict) -> dict:
                 'errors': sum(r.error_count or 0 for r in row_list),
             })
         if gpu_stats:
-            clients_data.append({'host': client.hostname, 'gpus': gpu_stats})
+            clients_data.append({'host': client.display_name or client.hostname, 'gpus': gpu_stats})
 
     rt = client_realtime_data
     now_t = datetime.now()
