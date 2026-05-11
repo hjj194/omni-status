@@ -189,6 +189,12 @@
     <h1 class="page-title">GPU 使用报告</h1>
     <p class="page-subtitle">过去 7 天每小时聚合 · 仅管理员可见</p>
 
+    <div class="report-tabs" style="display:flex;gap:6px;margin-bottom:20px;">
+        <a class="nav-link active" style="background:var(--accent-bg);color:var(--accent);"
+           href="{{ url_for('gpu_report.report_page') }}">整机视图</a>
+        <a class="nav-link" href="{{ url_for('gpu_report.users_page') }}">按用户</a>
+    </div>
+
     <!-- Summary tiles -->
     <div class="tile-grid">
         <div class="tile">

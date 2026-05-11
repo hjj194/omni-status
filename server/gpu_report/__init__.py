@@ -45,6 +45,8 @@ from .queries import (  # noqa: F401, E402
     get_heatmap_data,
     get_longterm_idle,
     get_error_gpus,
+    get_user_summary,
+    get_user_detail,
 )
 
 # 单机详情

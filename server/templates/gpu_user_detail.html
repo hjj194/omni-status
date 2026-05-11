@@ -1,0 +1,80 @@
+{% extends "_base.html" %}
+{% block title %}{{ detail.user_name }} · GPU 用量{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-eyebrow">User Detail</div>
+    <h1 class="page-title">{{ detail.user_name }}</h1>
+    <p class="page-subtitle">
+        {{ '过去 30 天' if period == 'month' else '过去 7 天' }} · 共 {{ detail.total_gpu_hours }} GPU 小时
+        {% if detail.idle_hours and detail.total_gpu_hours %}
+        · 空跑 {{ detail.idle_hours }} 小时 ({{ (detail.idle_hours / detail.total_gpu_hours * 100)|round(0)|int }}%)
+        {% endif %}
+    </p>
+
+    <div style="display:flex;gap:6px;margin-bottom:20px;">
+        <a class="nav-link"
+           href="{{ url_for('gpu_report.users_page', period=period) }}">
+            ← 返回排行榜
+        </a>
+        <a class="nav-link{% if period == 'week' %} active{% endif %}"
+           style="{% if period == 'week' %}background:var(--accent-bg);color:var(--accent);{% endif %}"
+           href="{{ url_for('gpu_report.user_detail_page', user_name=detail.user_name, period='week') }}">本周</a>
+        <a class="nav-link{% if period == 'month' %} active{% endif %}"
+           style="{% if period == 'month' %}background:var(--accent-bg);color:var(--accent);{% endif %}"
+           href="{{ url_for('gpu_report.user_detail_page', user_name=detail.user_name, period='month') }}">本月</a>
+    </div>
+
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">By Machine</div>
+                <h2 class="panel-title">按机器与 GPU 分布</h2>
+            </div>
+        </div>
+
+        {% if detail.machines %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>机器</th>
+                    <th class="num">GPU 序号</th>
+                    <th class="num">GPU 小时</th>
+                    <th class="num">平均显存 (MB)</th>
+                    <th class="num">平均利用率</th>
+                    <th class="num">空跑小时</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in detail.machines %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('gpu_report.detail_page', client_id=m.client_id, gpu_index=m.gpu_index) }}"
+                           style="color:var(--accent);text-decoration:none;">
+                            {{ m.display_name }}
+                        </a>
+                    </td>
+                    <td class="num">GPU {{ m.gpu_index }}</td>
+                    <td class="num">{{ m.gpu_hours }}</td>
+                    <td class="num">{{ m.vram_mb_avg }}</td>
+                    <td class="num">{{ m.util_pct_avg }}%</td>
+                    <td class="num">
+                        {{ m.idle_hours }}
+                        {% if m.gpu_hours > 0 %}
+                        <small style="color:var(--text-tertiary);">
+                            ({{ (m.idle_hours / m.gpu_hours * 100)|round(0)|int }}%)
+                        </small>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="panel-body">
+            <div class="empty-state">该时间段内没有这位用户的 GPU 使用记录。</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

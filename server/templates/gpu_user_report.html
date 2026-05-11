@@ -1,0 +1,82 @@
+{% extends "_base.html" %}
+{% block title %}用户 GPU 用量{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-eyebrow">Reports</div>
+    <h1 class="page-title">按用户的 GPU 使用情况</h1>
+    <p class="page-subtitle">每个用户在过去 {{ '30 天' if period == 'month' else '7 天' }} 的 GPU 占用统计</p>
+
+    <div class="report-tabs" style="display:flex;gap:6px;margin-bottom:20px;">
+        <a class="nav-link" href="{{ url_for('gpu_report.report_page') }}">整机视图</a>
+        <a class="nav-link active" style="background:var(--accent-bg);color:var(--accent);"
+           href="{{ url_for('gpu_report.users_page') }}">按用户</a>
+    </div>
+
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <div class="panel-eyebrow">User Ranking</div>
+                <h2 class="panel-title">用户排行榜</h2>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <a class="nav-link{% if period == 'week' %} active{% endif %}"
+                   style="{% if period == 'week' %}background:var(--accent-bg);color:var(--accent);{% endif %}"
+                   href="{{ url_for('gpu_report.users_page', period='week') }}">本周</a>
+                <a class="nav-link{% if period == 'month' %} active{% endif %}"
+                   style="{% if period == 'month' %}background:var(--accent-bg);color:var(--accent);{% endif %}"
+                   href="{{ url_for('gpu_report.users_page', period='month') }}">本月</a>
+                <a class="panel-action"
+                   href="{{ url_for('gpu_report.users_csv', period=period) }}">导出 CSV</a>
+            </div>
+        </div>
+
+        {% if summary %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>用户</th>
+                    <th class="num">GPU 小时</th>
+                    <th class="num">使用 GPU 数</th>
+                    <th class="num">平均显存 (MB)</th>
+                    <th class="num">平均利用率</th>
+                    <th class="num">空跑小时</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in summary %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('gpu_report.user_detail_page', user_name=row.user_name, period=period) }}"
+                           style="color:var(--accent);text-decoration:none;">
+                            {{ row.user_name }}
+                        </a>
+                    </td>
+                    <td class="num">{{ row.gpu_hours }}</td>
+                    <td class="num">{{ row.gpu_count }}</td>
+                    <td class="num">{{ row.vram_mb_avg }}</td>
+                    <td class="num">{{ row.util_pct_avg }}%</td>
+                    <td class="num{% if row.idle_hours > 0 and row.gpu_hours > 0
+                                   and (row.idle_hours / row.gpu_hours) > 0.5 %} muted{% endif %}">
+                        {{ row.idle_hours }}
+                        {% if row.gpu_hours > 0 %}
+                        <small style="color:var(--text-tertiary);">
+                            ({{ (row.idle_hours / row.gpu_hours * 100)|round(0)|int }}%)
+                        </small>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="panel-body">
+            <div class="empty-state">
+                暂无用户级 GPU 用量数据。<br>
+                <small>需要客户端升级到 0511-1 及以上版本才会上报。</small>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

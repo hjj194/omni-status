@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from server import db, Client, client_realtime_data
 
 from .config import _get_cfg
-from .models import GpuHourlyUsage
+from .models import GpuHourlyUsage, GpuUserHourlyUsage
 
 logger = logging.getLogger('system_monitor_server')
 
@@ -372,3 +372,141 @@ def get_error_gpus():
         })
     result.sort(key=lambda x: -x['err_hours'])
     return result
+
+
+# ─── 用户级 GPU 用量 ─────────────────────────────────────────────────────────
+
+def _period_window(period: str):
+    """把 'week' / 'month' 解析成 (start, end) datetime,end 是当前时刻。"""
+    now = datetime.now()
+    if period == 'month':
+        return now - timedelta(days=30), now
+    return now - timedelta(days=7), now
+
+
+def get_user_summary(period: str = 'week'):
+    """用户 GPU 用量排行榜。
+
+    返回 list of dict, 字段:
+      user_name, gpu_hours, vram_mb_avg, util_pct_avg, idle_hours, gpu_count
+    其中 gpu_hours = 该用户的 (gpu, hour) 唯一组合数;每个组合就是一个「GPU 小时」。
+    idle_hours = util_pct_avg < user_idle_util_threshold 的小时数。
+
+    按 gpu_hours 降序。
+    """
+    cfg = _get_cfg()
+    idle_threshold = cfg.get('user_idle_util_threshold', 10)
+    start, end = _period_window(period)
+
+    rows = (GpuUserHourlyUsage.query
+            .filter(GpuUserHourlyUsage.hour >= start)
+            .filter(GpuUserHourlyUsage.hour < end)
+            .all())
+
+    by_user: dict = {}
+    for r in rows:
+        u = r.user_name
+        entry = by_user.setdefault(u, {
+            'gpu_hours': 0,
+            'vram_sum': 0.0,
+            'util_sum': 0.0,
+            'sample_total': 0,
+            'idle_hours': 0,
+            'gpus': set(),
+        })
+        entry['gpu_hours'] += 1   # 一行 = 一个 (gpu, hour) 组合
+        entry['vram_sum'] += (r.vram_mb_avg or 0) * (r.sample_count or 0)
+        entry['util_sum'] += (r.util_pct_avg or 0) * (r.sample_count or 0)
+        entry['sample_total'] += (r.sample_count or 0)
+        entry['gpus'].add((r.client_id, r.gpu_index))
+        if (r.util_pct_avg or 0) < idle_threshold:
+            entry['idle_hours'] += 1
+
+    result = []
+    for user, e in by_user.items():
+        samples = e['sample_total'] or 1
+        result.append({
+            'user_name': user,
+            'gpu_hours': e['gpu_hours'],
+            'vram_mb_avg': round(e['vram_sum'] / samples, 1),
+            'util_pct_avg': round(e['util_sum'] / samples, 1),
+            'idle_hours': e['idle_hours'],
+            'gpu_count': len(e['gpus']),
+        })
+    result.sort(key=lambda x: -x['gpu_hours'])
+    return result
+
+
+def get_user_detail(user_name: str, period: str = 'week'):
+    """单个用户的下钻数据:在每台机器每张卡上的小时分布。
+
+    返回:
+      {
+        'user_name': str,
+        'period': 'week'|'month',
+        'total_gpu_hours': int,
+        'idle_hours': int,
+        'machines': [
+            {'client_id', 'display_name', 'hostname', 'gpu_index',
+             'gpu_hours', 'vram_mb_avg', 'util_pct_avg', 'idle_hours'},
+            ...
+        ],
+      }
+    """
+    cfg = _get_cfg()
+    idle_threshold = cfg.get('user_idle_util_threshold', 10)
+    start, end = _period_window(period)
+
+    rows = (GpuUserHourlyUsage.query
+            .filter_by(user_name=user_name)
+            .filter(GpuUserHourlyUsage.hour >= start)
+            .filter(GpuUserHourlyUsage.hour < end)
+            .all())
+
+    # 按 (client_id, gpu_index) 分组
+    machines: dict = {}
+    for r in rows:
+        key = (r.client_id, r.gpu_index)
+        m = machines.setdefault(key, {
+            'gpu_hours': 0,
+            'vram_sum': 0.0,
+            'util_sum': 0.0,
+            'sample_total': 0,
+            'idle_hours': 0,
+        })
+        m['gpu_hours'] += 1
+        m['vram_sum'] += (r.vram_mb_avg or 0) * (r.sample_count or 0)
+        m['util_sum'] += (r.util_pct_avg or 0) * (r.sample_count or 0)
+        m['sample_total'] += (r.sample_count or 0)
+        if (r.util_pct_avg or 0) < idle_threshold:
+            m['idle_hours'] += 1
+
+    client_lookup = {c.id: c for c in Client.query.all()}
+    machine_list = []
+    total_hours = 0
+    total_idle = 0
+    for (cid, gidx), m in machines.items():
+        samples = m['sample_total'] or 1
+        client = client_lookup.get(cid)
+        machine_list.append({
+            'client_id': cid,
+            'hostname': client.hostname if client else cid,
+            'display_name': (client.display_name or client.hostname) if client else cid,
+            'gpu_index': gidx,
+            'gpu_hours': m['gpu_hours'],
+            'vram_mb_avg': round(m['vram_sum'] / samples, 1),
+            'util_pct_avg': round(m['util_sum'] / samples, 1),
+            'idle_hours': m['idle_hours'],
+        })
+        total_hours += m['gpu_hours']
+        total_idle += m['idle_hours']
+
+    machine_list.sort(key=lambda x: -x['gpu_hours'])
+
+    return {
+        'user_name': user_name,
+        'period': period,
+        'total_gpu_hours': total_hours,
+        'idle_hours': total_idle,
+        'machines': machine_list,
+    }

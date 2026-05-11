@@ -1,5 +1,8 @@
 """GPU 报告 Blueprint 路由 —— 仅薄薄一层,业务逻辑都在 queries / detail 模块。"""
-from flask import Blueprint, render_template, jsonify, request, abort
+import csv
+from io import StringIO
+
+from flask import Blueprint, render_template, jsonify, request, abort, Response
 
 from auth import login_required
 
@@ -12,6 +15,8 @@ from .queries import (
     get_heatmap_data,
     get_longterm_idle,
     get_error_gpus,
+    get_user_summary,
+    get_user_detail,
 )
 
 gpu_report_bp = Blueprint('gpu_report', __name__,
@@ -95,3 +100,50 @@ def api_detail(client_id, gpu_index=None):
     if detail is None:
         return jsonify({'error': 'client not found'}), 404
     return jsonify(detail)
+
+
+# ─── 用户级 GPU 用量 ─────────────────────────────────────────────────────────
+
+def _normalize_period(raw):
+    return 'month' if raw == 'month' else 'week'
+
+
+@gpu_report_bp.route('/users')
+@login_required
+def users_page():
+    period = _normalize_period(request.args.get('period'))
+    summary = get_user_summary(period=period)
+    return render_template('gpu_user_report.html',
+                           summary=summary, period=period)
+
+
+@gpu_report_bp.route('/users/<user_name>')
+@login_required
+def user_detail_page(user_name):
+    period = _normalize_period(request.args.get('period'))
+    detail = get_user_detail(user_name, period=period)
+    if not detail['machines']:
+        # 没数据也展示页面,模板里 empty-state 处理
+        pass
+    return render_template('gpu_user_detail.html',
+                           detail=detail, period=period)
+
+
+@gpu_report_bp.route('/users.csv')
+@login_required
+def users_csv():
+    period = _normalize_period(request.args.get('period'))
+    summary = get_user_summary(period=period)
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(['user_name', 'gpu_hours', 'vram_mb_avg',
+                     'util_pct_avg', 'idle_hours', 'gpu_count'])
+    for r in summary:
+        writer.writerow([r['user_name'], r['gpu_hours'], r['vram_mb_avg'],
+                         r['util_pct_avg'], r['idle_hours'], r['gpu_count']])
+    return Response(
+        buf.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition':
+                 f'attachment; filename=gpu_users_{period}.csv'},
+    )

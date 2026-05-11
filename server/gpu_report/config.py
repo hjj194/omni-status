@@ -36,6 +36,7 @@ DEFAULT_CFG = {
     'llm_report_retention': 12,
     'uptime_record_retention_days': 90,
     'timezone': '',
+    'user_idle_util_threshold': 10,      # 用户报表中「空跑」util_pct 阈值
 }
 
 # Bounds for admin-configurable settings(防御性约束,导入新配置时也用)
@@ -43,6 +44,7 @@ SETTING_BOUNDS = {
     'retention_days':              (1, 365),
     'llm_report_retention':        (1, 100),
     'uptime_record_retention_days': (30, 730),
+    'user_idle_util_threshold':    (0, 100),
 }
 
 # 已知 Anthropic 模型列表(Anthropic 没有 /v1/models 端点)
