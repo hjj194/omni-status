@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from server import db
 
 from .config import _get_cfg
-from .models import GpuHourlyUsage, LlmReport
+from .models import GpuHourlyUsage, GpuUserHourlyUsage, LlmReport
 
 logger = logging.getLogger('system_monitor_server')
 
@@ -22,8 +22,9 @@ def cleanup_hourly():
     cfg = _get_cfg()
     cutoff = datetime.now() - timedelta(days=cfg['retention_days'])
     deleted = GpuHourlyUsage.query.filter(GpuHourlyUsage.hour < cutoff).delete()
+    u_deleted = GpuUserHourlyUsage.query.filter(GpuUserHourlyUsage.hour < cutoff).delete()
     db.session.commit()
-    logger.info(f"GPU 小时数据清理: 删除 {deleted} 行(早于 {cutoff.date()})")
+    logger.info(f"GPU 小时数据清理: 删除 {deleted} 行(整机) + {u_deleted} 行(按用户),早于 {cutoff.date()}")
 
     # 同时按配置清理 UptimeRecord 防止无限累积
     try:

@@ -8,7 +8,7 @@ import logging
 logger = logging.getLogger('system_monitor_server')
 
 # Models 必须最先 import,确保 SQLAlchemy 注册到 db.metadata
-from .models import GpuHourlyUsage, LlmReport  # noqa: F401, E402
+from .models import GpuHourlyUsage, GpuUserHourlyUsage, LlmReport  # noqa: F401, E402
 
 # Config 是其他模块的基础
 from .config import (  # noqa: F401, E402
@@ -21,7 +21,7 @@ from .config import (  # noqa: F401, E402
 )
 
 # Ingest
-from .ingest import ingest_hourly_sample  # noqa: F401, E402
+from .ingest import ingest_hourly_sample, ingest_user_hourly_sample  # noqa: F401, E402
 
 # Scheduler + 后台任务
 from .scheduler import (  # noqa: F401, E402

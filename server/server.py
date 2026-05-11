@@ -426,6 +426,17 @@ def report():
         db.session.rollback()
         logger.warning(f"GPU 小时样本写入失败: {e}")
 
+    # 用户级 GPU 用量聚合(0511+ client 才上报 gpu_processes,老 client 跳过)
+    if data.get('gpu_processes'):
+        try:
+            from gpu_report import ingest_user_hourly_sample
+            for proc in data['gpu_processes']:
+                ingest_user_hourly_sample(data['client_id'], proc, now_ts)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"用户级 GPU 样本写入失败: {e}")
+
     # 仅当有新客户端注册时保存配置
     if is_new_client:
         save_client_configs()
