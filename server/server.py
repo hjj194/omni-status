@@ -184,6 +184,28 @@ else:
 
 db = SQLAlchemy(app)
 
+# ─── SQLite 性能 pragmas ─────────────────────────────────────────────────
+# WAL: 写锁不阻塞读,大幅缓解多 client 并发上报时的锁竞争
+# synchronous=NORMAL: WAL 模式下足够安全(掉电最多丢最后几秒数据,监控场景可接受)
+# cache_size=-64000: 64MB 页缓存,报表页扫几千行小时数据基本全 in-memory
+# foreign_keys=ON: 启用 CASCADE 删除(模型里依赖 ondelete='CASCADE')
+#
+# 监听全局 Engine 类而不是 db.engine,避免在模块导入时触发 app-context 依赖。
+# 仅对 SQLite 后端生效,Postgres 等其他后端会跳过。
+from sqlalchemy import event  # noqa: E402
+from sqlalchemy.engine import Engine  # noqa: E402
+
+@event.listens_for(Engine, 'connect')
+def _set_sqlite_pragmas(dbapi_conn, _):
+    if 'sqlite3' not in type(dbapi_conn).__module__.lower():
+        return
+    cursor = dbapi_conn.cursor()
+    cursor.execute('PRAGMA journal_mode=WAL')
+    cursor.execute('PRAGMA synchronous=NORMAL')
+    cursor.execute('PRAGMA cache_size=-64000')
+    cursor.execute('PRAGMA foreign_keys=ON')
+    cursor.close()
+
 # 服务端期望的最低客户端版本(用于 dashboard 标识"待升级"机器)
 EXPECTED_CLIENT_VERSION = '0426-1'
 
