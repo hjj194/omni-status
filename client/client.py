@@ -15,7 +15,7 @@ import sys
 import concurrent.futures
 
 # 客户端版本号(每次发布升级一次,服务端用它标识哪些机器待升级)
-CLIENT_VERSION = '0426-1'
+CLIENT_VERSION = '0511-1'
 
 # 检查配置文件路径
 CONFIG_FILE = '/etc/system-monitor/client.conf'
@@ -153,6 +153,191 @@ def get_nvidia_gpu_info():
             gpus.append(_parse_gpu_line(i, line))
     return gpus
 
+# ─── 用户级 GPU 用量采集 ──────────────────────────────────────────────────
+# 通过 nvidia-smi 列出 GPU 上的进程,按 (user, gpu_index) 聚合一次再上报。
+# 仅裸机有效;容器内 PID namespace 隔离会导致 PID→user 映射失败,目前
+# 已在方案中确认实验室全是裸机。
+
+# 过滤掉的系统级用户(显卡上 X server / display manager 之类的"杂项")
+_SYSTEM_USERS = frozenset({
+    'root', 'gdm', 'lightdm', 'sddm', 'xorg',
+    'nobody', 'systemd-resolve', 'messagebus',
+})
+
+
+def _pid_to_username(pid: int):
+    """裸机环境下把 PID 翻译成登录用户名。
+
+    优先级: /proc/<pid>/loginuid → /proc/<pid>/status 的 Uid 行。
+    任何一步失败返回 None,调用方归类到 __unknown__。
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    try:
+        with open(f'/proc/{pid}/loginuid', 'r') as f:
+            loginuid = int(f.read().strip())
+        if loginuid != (1 << 32) - 1:   # 4294967295 = "未设置"
+            import pwd
+            return pwd.getpwuid(loginuid).pw_name
+    except (FileNotFoundError, PermissionError, KeyError, ValueError):
+        pass
+    try:
+        with open(f'/proc/{pid}/status', 'r') as f:
+            for line in f:
+                if line.startswith('Uid:'):
+                    uid = int(line.split()[1])
+                    if uid < 1000:
+                        return None    # 系统账户,忽略
+                    import pwd
+                    return pwd.getpwuid(uid).pw_name
+    except (FileNotFoundError, PermissionError, KeyError, ValueError):
+        pass
+    return None
+
+
+def _parse_compute_apps_output(text: str):
+    """nvidia-smi --query-compute-apps=pid,used_memory,gpu_uuid 的解析。
+
+    返回 [(pid, used_memory_mb, gpu_uuid), ...]
+    """
+    rows = []
+    for line in text.strip().split('\n'):
+        if not line.strip():
+            continue
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            mem = float(parts[1])
+            uuid_s = parts[2]
+            rows.append((pid, mem, uuid_s))
+        except (ValueError, IndexError):
+            continue
+    return rows
+
+
+def _parse_pmon_output(text: str):
+    """nvidia-smi pmon -c 1 -s u 的输出解析。
+
+    pmon 输出形如(列宽对齐, # 开头是注释):
+        # gpu        pid  type    sm   mem   enc   dec   command
+        # Idx          #   C/G     %     %     %     %   name
+            0      1234     C    45    20     0     0   python
+            1      5678     C     0     0     0     0   python
+
+    返回 {pid: util_pct, ...} (取 sm 列)
+    """
+    result = {}
+    for line in text.strip().split('\n'):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        try:
+            pid = int(parts[1])
+            sm  = parts[3]
+            util = 0.0 if sm == '-' else float(sm)
+            result[pid] = util
+        except (ValueError, IndexError):
+            continue
+    return result
+
+
+def _build_uuid_to_index(gpu_info):
+    """nvidia-smi --query-gpu 的输出已经按 index 顺序排,需要单独取 uuid 做映射。
+
+    被 get_gpu_process_info 调用一次,失败返回空 dict(进程上报会缺 gpu_index 兜底为 0)。
+    """
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader'],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+        return {}
+    mapping = {}
+    for line in result.stdout.strip().split('\n'):
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) >= 2:
+            try:
+                mapping[parts[1]] = int(parts[0])
+            except ValueError:
+                continue
+    return mapping
+
+
+def get_gpu_process_info():
+    """采集 GPU 上每个进程的 (user, gpu_index, mem_mb, util_pct)。
+
+    流程:
+      1. nvidia-smi --query-compute-apps 拿每进程显存 + 进程归属的 GPU UUID
+      2. nvidia-smi pmon -c 1 -s u 拿每进程 SM 利用率
+      3. PID → username (优先 loginuid,系统用户过滤)
+      4. 按 (user, gpu_index) 聚合: 显存求和,利用率取 max
+    返回 [{'user', 'gpu_index', 'mem_mb', 'util_pct'}, ...]
+
+    nvidia-smi 不可用 / 没卡 / 没进程 → 返回 []。
+    """
+    if _nvidia_available is False:
+        return []
+    try:
+        proc_result = subprocess.run(
+            ['nvidia-smi',
+             '--query-compute-apps=pid,used_memory,gpu_uuid',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+    except FileNotFoundError:
+        return []
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+        logger.warning("nvidia-smi 进程查询失败,跳过本次用户级采集")
+        return []
+
+    apps = _parse_compute_apps_output(proc_result.stdout)
+    if not apps:
+        return []
+
+    uuid_to_idx = _build_uuid_to_index(None)
+
+    try:
+        pmon_result = subprocess.run(
+            ['nvidia-smi', 'pmon', '-c', '1', '-s', 'u'],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+        pid_to_util = _parse_pmon_output(pmon_result.stdout)
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired,
+            FileNotFoundError):
+        # MIG / 旧驱动 / 权限不足 → pmon 可能拿不到,VRAM 数据还能用
+        pid_to_util = {}
+
+    agg: dict = {}    # (user, gpu_index) -> {'mem_mb', 'util_pct'}
+    for pid, mem, gpu_uuid in apps:
+        user = _pid_to_username(pid)
+        if user is None:
+            user = '__unknown__'
+        elif user in _SYSTEM_USERS:
+            continue
+        gpu_idx = uuid_to_idx.get(gpu_uuid, 0)
+        util = pid_to_util.get(pid, 0.0)
+        key = (user, gpu_idx)
+        if key not in agg:
+            agg[key] = {'mem_mb': 0.0, 'util_pct': 0.0}
+        agg[key]['mem_mb']   += mem
+        agg[key]['util_pct'] = max(agg[key]['util_pct'], util)
+
+    return [
+        {'user': u, 'gpu_index': g,
+         'mem_mb': round(v['mem_mb'], 1),
+         'util_pct': round(v['util_pct'], 1)}
+        for (u, g), v in agg.items()
+    ]
+
+
 def get_system_info(client_id):
     """收集系统信息"""
     # CPU信息（非阻塞，基于距上次调用的时间窗口计算）
@@ -217,6 +402,8 @@ def get_system_info(client_id):
     
     # GPU信息
     gpu_info = get_nvidia_gpu_info()
+    # 用户级 GPU 进程信息(0511+):有卡才采,无卡返回 []
+    gpu_processes = get_gpu_process_info() if gpu_info else []
     
     # 获取主机名和IP
     hostname = socket.gethostname()
@@ -248,6 +435,7 @@ def get_system_info(client_id):
         'memory': memory_usage,
         'disks': disks,
         'gpu': gpu_info,
+        'gpu_processes': gpu_processes,
         'uptime_seconds': uptime_seconds
     }
 
