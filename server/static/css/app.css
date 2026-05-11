@@ -300,39 +300,13 @@ html, body {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* ─── Dark mode ─────────────────────────────────────────────────────── */
-
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg-page:   #1C1C1E;
-        --bg-card:   #2C2C2E;
-        --bg-subtle: #3A3A3C;
-        --bg-hover:  rgba(255, 255, 255, 0.05);
-
-        --text-primary:    #F5F5F7;
-        --text-secondary:  #AEAEB2;
-        --text-tertiary:   #636366;
-        --text-quaternary: #48484A;
-
-        --separator:        rgba(255, 255, 255, 0.10);
-        --separator-strong: rgba(255, 255, 255, 0.18);
-
-        --accent-bg: rgba(0, 113, 227, 0.18);
-
-        --status-low-bg: rgba(52, 199, 89, 0.15);
-        --status-mid-bg: rgba(255, 149, 0, 0.15);
-        --status-high-bg:rgba(255, 59, 48, 0.15);
-        --status-nodata: #2C2C2E;
-
-        --shadow-sm:    0 0 0 1px rgba(255,255,255,0.06);
-        --shadow-md:    0 1px 3px rgba(0,0,0,.3), 0 0 0 1px rgba(255,255,255,0.06);
-        --shadow-hover: 0 4px 12px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,0.08);
-    }
-
-    .top-bar {
-        background: rgba(28, 28, 30, 0.82);
-    }
-}
+/* ─── Force light scheme ─────────────────────────────────────────────────
+   Templates (dashboard.html, announcements.html, etc.) hardcode light
+   backgrounds (#fff / #f8f9fa) that don't switch with prefers-color-scheme.
+   Until full dark-mode support is implemented across every template,
+   force light to prevent invisible text on phones with system dark mode.
+   ========================================================================== */
+:root { color-scheme: light; }
 
 /* ─── Buttons (Bootstrap override / Apple-flavored) ──────────────────── */
 
