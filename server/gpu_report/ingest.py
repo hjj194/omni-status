@@ -1,9 +1,18 @@
 """客户端 /report 调用时的小时聚合写入。"""
+import logging
+import re
 from datetime import datetime
 
 from server import db
 
 from .models import GpuHourlyUsage, GpuUserHourlyUsage
+
+logger = logging.getLogger('system_monitor_server')
+
+# 接受的用户名字符集 — POSIX 标准 + 中文实验室常见的下划线/连字符。
+# 拒绝任何含 HTML/SQL/控制字符的字符串(模板 auto-escape 已经防 XSS,
+# 这里是 defense-in-depth + 防 CSV 公式注入根源)。32 字符上限避免日志/UI 膨胀。
+_USERNAME_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_\-.]{0,31}$')
 
 
 def ingest_hourly_sample(client_id: str, gpu: dict, now: datetime) -> None:
@@ -56,17 +65,44 @@ def ingest_user_hourly_sample(client_id: str, proc: dict, now: datetime) -> None
 
     proc 形如 {'user': 'alice', 'gpu_index': 0, 'mem_mb': 4096, 'util_pct': 35}。
 
-    必填字段缺失/类型错误时静默跳过(向后兼容老 client 上报半成品)。
+    校验/防御逻辑:
+    - user_name 不通过 POSIX 字符集校验 → 归类 __unknown__(防 CSV 公式注入/未来 XSS)
+    - mem_mb / util_pct 是 None 或缺失 → 跳过样本(防止把数据收集 gap 当成 0 用量,
+      会把用户均值人为压低,导致导师误判用户实际使用强度)
+    - mem_mb 和 util_pct 都 ≤ 0 → 跳过(没意义的零样本)
+    - 类型错误 → 记 warning 跳过(便于运维查出哪台 client 上报半成品)
+
     不在本函数内 commit;调用方负责 commit/rollback。
     """
-    user = proc.get('user') or proc.get('user_name')
-    if not user:
+    user_raw = proc.get('user') or proc.get('user_name')
+    if user_raw and _USERNAME_RE.match(str(user_raw)):
+        user = str(user_raw)
+    else:
+        if user_raw:
+            logger.warning(
+                f"非法 user_name {user_raw!r} 来自 client={client_id},"
+                f" 归类 __unknown__")
         user = '__unknown__'
+
+    # 严格区分 "缺失/None" 与 "真实零值"。
+    # 旧版本用 `or 0` 把 None 当 0,导致采集 gap 被记成"用户均值 0 MB"。
+    raw_mem  = proc.get('mem_mb')
+    raw_util = proc.get('util_pct')
+    if raw_mem is None or raw_util is None:
+        logger.warning(
+            f"gpu_processes 缺 mem_mb/util_pct from client={client_id}: {proc!r}")
+        return
     try:
         gpu_index = int(proc.get('gpu_index', 0))
-        mem_mb    = float(proc.get('mem_mb', 0) or 0)
-        util_pct  = float(proc.get('util_pct', 0) or 0)
+        mem_mb    = float(raw_mem)
+        util_pct  = float(raw_util)
     except (TypeError, ValueError):
+        logger.warning(
+            f"gpu_processes 类型错误 from client={client_id}: {proc!r}")
+        return
+
+    # mem 和 util 都 ≤ 0 → 没意义的样本,跳过避免拉低 running mean
+    if mem_mb <= 0 and util_pct <= 0:
         return
 
     hour = now.replace(minute=0, second=0, microsecond=0)

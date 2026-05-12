@@ -73,9 +73,16 @@ def save_runtime_settings(updates: dict, app=None):
     current = load_runtime_settings()
     current.update(updates)
     tmp = RUNTIME_SETTINGS_FILE + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
+    # 文件可能含 LLM API key,创建时直接限制为 owner-only
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
         json.dump(current, f, indent=2, ensure_ascii=False)
     os.replace(tmp, RUNTIME_SETTINGS_FILE)
+    # os.replace 在 Linux 上保留目标的现有权限;若文件之前是 0664 这里强制收紧
+    try:
+        os.chmod(RUNTIME_SETTINGS_FILE, 0o600)
+    except OSError as e:
+        logger.warning(f"chmod runtime_settings.json 失败: {e}")
     if app is not None:
         # 立即同步到 app.config 让运行中的代码读到新值
         cfg = app.config.setdefault('GPU_REPORT', dict(DEFAULT_CFG))

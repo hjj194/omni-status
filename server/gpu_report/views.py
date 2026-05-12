@@ -129,6 +129,18 @@ def user_detail_page(user_name):
                            detail=detail, period=period)
 
 
+# Excel / LibreOffice 把以这些字符开头的 cell 当公式解析,
+# 导致 CSV formula injection。用前导单引号兜底转义。
+_CSV_FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _csv_safe(value):
+    """防 CSV 公式注入: 给可能被 Excel 当公式解析的字符串加前导单引号。"""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
+
 @gpu_report_bp.route('/users.csv')
 @login_required
 def users_csv():
@@ -139,7 +151,8 @@ def users_csv():
     writer.writerow(['user_name', 'gpu_hours', 'vram_mb_avg',
                      'util_pct_avg', 'idle_hours', 'gpu_count'])
     for r in summary:
-        writer.writerow([r['user_name'], r['gpu_hours'], r['vram_mb_avg'],
+        writer.writerow([_csv_safe(r['user_name']),
+                         r['gpu_hours'], r['vram_mb_avg'],
                          r['util_pct_avg'], r['idle_hours'], r['gpu_count']])
     return Response(
         buf.getvalue(),

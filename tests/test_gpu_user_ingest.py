@@ -159,6 +159,94 @@ def test_invalid_numeric_silently_skipped(app, ingest, query_row):
     assert rows == []
 
 
+# ─── null vs zero (post-review hardening) ────────────────────────────────────
+
+def test_null_mem_mb_skipped_not_averaged(app, ingest, query_row):
+    """回归: 旧版本把 mem_mb=None 当成 0 累计,会把均值人为压低。"""
+    _ingest, _ = ingest
+    _ingest(make_proc(user='alice', mem_mb=4096, util_pct=50))  # 1 个正常样本
+    _ingest({'user': 'alice', 'gpu_index': 0, 'mem_mb': None, 'util_pct': 50})
+    with app.app_context():
+        row = query_row(user='alice')
+    # 只有 1 个有效样本,均值就是 4096 而不是 (4096+0)/2 = 2048
+    assert row.sample_count == 1
+    assert abs(row.vram_mb_avg - 4096) < 0.01
+
+
+def test_null_util_pct_skipped(app, ingest):
+    _ingest, _ = ingest
+    _ingest({'user': 'alice', 'gpu_index': 0, 'mem_mb': 1024, 'util_pct': None})
+    with app.app_context():
+        from gpu_report import GpuUserHourlyUsage
+        assert GpuUserHourlyUsage.query.count() == 0
+
+
+def test_both_zero_sample_skipped(app, ingest):
+    """mem=0 且 util=0 是没意义的样本,跳过避免拉低均值。"""
+    _ingest, _ = ingest
+    _ingest(make_proc(user='alice', mem_mb=0, util_pct=0))
+    with app.app_context():
+        from gpu_report import GpuUserHourlyUsage
+        assert GpuUserHourlyUsage.query.count() == 0
+
+
+def test_mem_zero_but_util_nonzero_kept(app, ingest, query_row):
+    """显存 0 但 util > 0 (短任务/MIG slice) 仍是有效样本。"""
+    _ingest, _ = ingest
+    _ingest(make_proc(user='alice', mem_mb=0, util_pct=30))
+    with app.app_context():
+        row = query_row(user='alice')
+    assert row is not None
+    assert row.sample_count == 1
+
+
+# ─── username validation (defense in depth) ──────────────────────────────────
+
+def test_username_with_html_injected_becomes_unknown(app, ingest, query_row):
+    """防御性: 即便 client 上报 HTML 字符,服务端正则也会拒收。"""
+    _ingest, _ = ingest
+    _ingest({'user': '<script>alert(1)</script>',
+             'gpu_index': 0, 'mem_mb': 4096, 'util_pct': 50})
+    with app.app_context():
+        row = query_row(user='__unknown__')
+    assert row is not None
+    assert row.sample_count == 1
+
+
+def test_username_with_csv_formula_prefix_rejected(app, ingest, query_row):
+    """=cmd|... 公式注入 payload 直接归类 unknown。"""
+    _ingest, _ = ingest
+    _ingest({'user': '=HYPERLINK("evil.com",1)',
+             'gpu_index': 0, 'mem_mb': 4096, 'util_pct': 50})
+    with app.app_context():
+        row = query_row(user='__unknown__')
+    assert row is not None
+
+
+def test_username_overly_long_rejected(app, ingest, query_row):
+    """超过 32 字符的用户名(防 UI 撑爆 + 防 DB 灌)归类 unknown。"""
+    _ingest, _ = ingest
+    long_user = 'a' * 50
+    _ingest({'user': long_user,
+             'gpu_index': 0, 'mem_mb': 4096, 'util_pct': 50})
+    with app.app_context():
+        row = query_row(user='__unknown__')
+    assert row is not None
+
+
+def test_normal_unix_usernames_accepted(app, ingest, query_row):
+    """常见 Unix 用户名风格全部应通过。"""
+    _ingest, _ = ingest
+    for u in ('alice', 'bob_smith', 'user-001', 'phd.student', 'a1', 'X9'):
+        _ingest({'user': u, 'gpu_index': 0,
+                 'mem_mb': 1024, 'util_pct': 10})
+    with app.app_context():
+        from gpu_report import GpuUserHourlyUsage
+        users = {r.user_name for r in
+                 GpuUserHourlyUsage.query.filter_by(client_id='client-u01').all()}
+    assert users == {'alice', 'bob_smith', 'user-001', 'phd.student', 'a1', 'X9'}
+
+
 # ─── /report integration: payload without gpu_processes still works ─────────
 
 def test_report_endpoint_accepts_payload_without_gpu_processes(app, client):

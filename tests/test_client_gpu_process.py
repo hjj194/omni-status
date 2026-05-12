@@ -286,6 +286,61 @@ def test_get_gpu_process_info_no_processes(reset_nvidia_cache):
         assert get_gpu_process_info() == []
 
 
+def test_get_gpu_process_info_skips_cycle_when_uuid_lookup_fails(reset_nvidia_cache):
+    """回归测试: 早期版本在 query-gpu 失败时会把所有进程错误归到 GPU 0,
+    现在改为跳过本次采集。"""
+    from client import get_gpu_process_info
+    from subprocess import SubprocessError
+
+    def fake_run(cmd, **kw):
+        if 'query-gpu' in ' '.join(cmd):
+            raise SubprocessError("nvidia-smi index/uuid query failed")
+        out = MagicMock()
+        if 'query-compute-apps' in ' '.join(cmd):
+            # 有 5 个进程跑在不同卡上
+            out.stdout = ('1, 1000, GPU-aaaa\n'
+                          '2, 2000, GPU-bbbb\n'
+                          '3, 3000, GPU-cccc\n')
+        elif 'pmon' in cmd:
+            out.stdout = '# h\n0 1 C 50 30\n1 2 C 50 30\n2 3 C 50 30\n'
+        else:
+            out.stdout = ''
+        return out
+
+    with patch('client.subprocess.run', side_effect=fake_run), \
+         patch('client._pid_to_username', return_value='alice'):
+        result = get_gpu_process_info()
+
+    # 关键断言: 必须返回 [],不能把 3 个进程都聚成一行 gpu_index=0
+    assert result == []
+
+
+def test_get_gpu_process_info_skips_processes_referencing_unknown_uuid(reset_nvidia_cache):
+    """uuid_to_idx 里没有某个进程的 UUID 时,跳过该进程(不归到 GPU 0)。"""
+    from client import get_gpu_process_info
+
+    def fake_run(cmd, **kw):
+        out = MagicMock()
+        if 'query-compute-apps' in ' '.join(cmd):
+            out.stdout = ('1, 1000, GPU-known\n'
+                          '2, 2000, GPU-unknown\n')   # 第二个 UUID 不在 query-gpu 输出里
+        elif 'pmon' in cmd:
+            out.stdout = '# h\n0 1 C 50 30\n1 2 C 60 40\n'
+        elif 'query-gpu' in ' '.join(cmd):
+            out.stdout = '0, GPU-known\n'              # 只列出第一个
+        else:
+            out.stdout = ''
+        return out
+
+    with patch('client.subprocess.run', side_effect=fake_run), \
+         patch('client._pid_to_username', return_value='alice'):
+        result = get_gpu_process_info()
+
+    assert len(result) == 1
+    assert result[0]['gpu_index'] == 0
+    assert result[0]['mem_mb'] == 1000   # 只有 pid=1 被聚合,pid=2 被丢弃
+
+
 def test_get_gpu_process_info_pmon_fails_vram_still_works(reset_nvidia_cache):
     """pmon 在 MIG 上可能失败,显存数据仍然能上报,util=0。"""
     from client import get_gpu_process_info

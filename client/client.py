@@ -248,10 +248,11 @@ def _parse_pmon_output(text: str):
     return result
 
 
-def _build_uuid_to_index(gpu_info):
-    """nvidia-smi --query-gpu 的输出已经按 index 顺序排,需要单独取 uuid 做映射。
+def _build_uuid_to_index():
+    """单独跑一次 nvidia-smi 取 (index, uuid) 映射。
 
-    被 get_gpu_process_info 调用一次,失败返回空 dict(进程上报会缺 gpu_index 兜底为 0)。
+    被 get_gpu_process_info 调用一次。失败时返回空 dict,调用方负责跳过本次采集
+    而不是错误地把所有进程归到 GPU 0。
     """
     try:
         result = subprocess.run(
@@ -302,7 +303,15 @@ def get_gpu_process_info():
     if not apps:
         return []
 
-    uuid_to_idx = _build_uuid_to_index(None)
+    # UUID → index 映射如果失败,跳过这次采集而不是把所有进程错误归到 GPU 0。
+    # 多卡机器上 GPU 0 错误聚合会让用户报表里某些卡假阴性,导师做调度决策时基于
+    # 错的数据,比缺一次采集更糟。
+    uuid_to_idx = _build_uuid_to_index()
+    if not uuid_to_idx:
+        logger.warning(
+            "nvidia-smi UUID→index 映射查询失败,跳过本次用户级采集"
+            " (避免将所有进程误归到 GPU 0)")
+        return []
 
     try:
         pmon_result = subprocess.run(
@@ -317,12 +326,16 @@ def get_gpu_process_info():
 
     agg: dict = {}    # (user, gpu_index) -> {'mem_mb', 'util_pct'}
     for pid, mem, gpu_uuid in apps:
+        if gpu_uuid not in uuid_to_idx:
+            # 进程引用了未知 UUID(可能是 MIG slice 或采集瞬间卡热插拔),跳过
+            logger.debug(f"未知 GPU UUID {gpu_uuid},pid={pid} 跳过")
+            continue
         user = _pid_to_username(pid)
         if user is None:
             user = '__unknown__'
         elif user in _SYSTEM_USERS:
             continue
-        gpu_idx = uuid_to_idx.get(gpu_uuid, 0)
+        gpu_idx = uuid_to_idx[gpu_uuid]
         util = pid_to_util.get(pid, 0.0)
         key = (user, gpu_idx)
         if key not in agg:

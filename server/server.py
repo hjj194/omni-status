@@ -11,6 +11,7 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, date as date_type
 from werkzeug.security import generate_password_hash, check_password_hash
 import functools
+import hmac
 import json
 import os
 import logging
@@ -367,13 +368,14 @@ def readyz():
 def report():
     """接收客户端上报的数据"""
     # ── /report token 校验(若 server.conf 配了 report_token 就强制) ──
+    # hmac.compare_digest 是常量时间比较,避免内网 timing 推测 token 字符。
     expected_token = config.get('report_token', '')
     if expected_token:
         auth = request.headers.get('Authorization', '')
         token = (auth.removeprefix('Bearer ').strip()
                  if auth.startswith('Bearer ') else
                  request.headers.get('X-Report-Token', ''))
-        if not token or token != expected_token:
+        if not token or not hmac.compare_digest(token, expected_token):
             logger.warning(f"/report 鉴权失败 from {request.remote_addr}")
             return jsonify({'error': 'unauthorized'}), 401
 
@@ -1181,11 +1183,17 @@ def export_llm_reports():
                              f'attachment; filename="{filename}"'})
 
 
+_EXPORT_REDACTED_KEYS = frozenset({'llm_api_key'})
+
+
 @app.route('/settings/export/runtime_settings.json')
 @login_required
 def export_runtime_settings():
+    """导出运行时配置。敏感字段(API key 等)从输出中剔除,
+    避免通过浏览器下载或抓包泄露 — admin 想看 key 应该直接读服务器文件。"""
     from gpu_report import load_runtime_settings
-    rs = load_runtime_settings()
+    rs = {k: v for k, v in load_runtime_settings().items()
+          if k not in _EXPORT_REDACTED_KEYS}
     body = json.dumps(rs, ensure_ascii=False, indent=2)
     return Response(body, mimetype='application/json; charset=utf-8',
                     headers={'Content-Disposition':

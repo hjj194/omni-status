@@ -201,3 +201,87 @@ def test_users_csv_invalid_period_falls_back_to_week(logged_in_client, seed_user
     resp = logged_in_client.get('/gpu-report/users.csv?period=garbage')
     cd = resp.headers.get('Content-Disposition', '')
     assert 'gpu_users_week.csv' in cd
+
+
+# ─── CSV formula injection (security hardening) ──────────────────────────────
+
+def test_csv_export_quotes_formula_prefix_in_username(app, logged_in_client):
+    """如果 user_name 以 = + - @ \\t \\r 开头(就算 ingest 阶段没拦住,
+    比如未来直接写库的工具绕过),CSV 导出必须加单引号兜底。"""
+    from server import db, Client
+    from gpu_report import GpuUserHourlyUsage
+    from datetime import datetime, timedelta
+
+    with app.app_context():
+        if not db.session.get(Client, 'csv-test'):
+            db.session.add(Client(
+                id='csv-test', hostname='csv-test', ip_address='1.1.1.1',
+                display_name='CSV', platform='linux', display_order=0))
+        db.session.commit()
+        now = datetime.now().replace(minute=0, second=0, microsecond=0)
+        for evil in ('=cmd|"calc"!A1', '+SUM(A1:A2)', '-1+1', '@SUM(1)'):
+            db.session.add(GpuUserHourlyUsage(
+                client_id='csv-test', gpu_index=0, user_name=evil,
+                hour=now - timedelta(hours=1),
+                vram_mb_avg=1000, vram_mb_peak=1000,
+                util_pct_avg=50, util_pct_peak=50,
+                sample_count=60,
+            ))
+        db.session.commit()
+
+    resp = logged_in_client.get('/gpu-report/users.csv')
+    body = resp.get_data(as_text=True)
+    # 单元格值不能以裸的 = + - @ 开头
+    for line in body.strip().split('\n')[1:]:
+        first_cell = line.split(',')[0]
+        # csv module 会用 " 包裹含特殊字符的值,所以剥一下
+        stripped = first_cell.lstrip('"')
+        assert not stripped.startswith(('=', '+', '-', '@')), \
+            f"未转义的公式触发字符: {first_cell!r}"
+
+
+# ─── /report token constant-time compare ─────────────────────────────────────
+
+def test_report_token_constant_time_compare_rejects_wrong_token(app, client):
+    """token 错误返回 401,不泄露具体匹配进度。"""
+    from datetime import datetime
+    # 临时设置 token 校验
+    with app.app_context():
+        from server import config as server_config
+        original = server_config.get('report_token', '')
+        server_config['report_token'] = 'correct-token-xyz'
+    try:
+        payload = {
+            'client_id': 'tok-test', 'hostname': 'h', 'ip_address': '1.1.1.1',
+            'platform': 'linux', 'timestamp': datetime.now().isoformat(),
+            'cpu': {'count': 1, 'usage_percent': 0},
+            'memory': {'total': 1, 'used': 0, 'percent': 0},
+            'disks': [], 'gpu': [], 'uptime_seconds': 1,
+        }
+        resp_wrong = client.post('/report', json=payload,
+                                 headers={'Authorization': 'Bearer wrong'})
+        resp_right = client.post('/report', json=payload,
+                                 headers={'Authorization': 'Bearer correct-token-xyz'})
+        assert resp_wrong.status_code == 401
+        assert resp_right.status_code == 200
+    finally:
+        with app.app_context():
+            from server import config as server_config
+            server_config['report_token'] = original
+
+
+# ─── export endpoint redaction ───────────────────────────────────────────────
+
+def test_runtime_settings_export_redacts_api_key(app, logged_in_client):
+    """API key 不能通过 /settings/export/runtime_settings.json 泄露。"""
+    import json as _json
+    with app.app_context():
+        from gpu_report import save_runtime_settings
+        save_runtime_settings({'llm_api_key': 'sk-supersecret123'}, app=app)
+
+    resp = logged_in_client.get('/settings/export/runtime_settings.json')
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    parsed = _json.loads(body)
+    assert 'llm_api_key' not in parsed
+    assert 'sk-supersecret123' not in body
