@@ -440,7 +440,9 @@ def report():
     _record_uptime(data['client_id'], data)
     db.session.commit()
 
-    # GPU 小时聚合(独立提交,失败不影响 dashboard)
+    # GPU 小时聚合(独立提交,失败不影响 dashboard)。
+    # 用 error + exc_info: 这里失败意味着周报数据有洞,导师可能据此误判;
+    # warning 在生产日志里太容易被忽略。
     try:
         from gpu_report import ingest_hourly_sample
         for gpu in data.get('gpu', []):
@@ -448,7 +450,9 @@ def report():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        logger.warning(f"GPU 小时样本写入失败: {e}")
+        logger.error(
+            f"GPU 小时样本写入失败 client={data['client_id']}: {e}",
+            exc_info=True)
 
     # 用户级 GPU 用量聚合(0511+ client 才上报 gpu_processes,老 client 跳过)
     if data.get('gpu_processes'):
@@ -459,7 +463,9 @@ def report():
             db.session.commit()
         except Exception as e:
             db.session.rollback()
-            logger.warning(f"用户级 GPU 样本写入失败: {e}")
+            logger.error(
+                f"用户级 GPU 样本写入失败 client={data['client_id']}: {e}",
+                exc_info=True)
 
     # 仅当有新客户端注册时保存配置
     if is_new_client:
@@ -848,7 +854,12 @@ def settings():
             flash('当前密码不正确', 'danger')
         
         return redirect(url_for('settings'))
-    
+
+    # 首次登录强制改密时只渲染最小密码修改页 —— 避免把完整设置布局/状态
+    # 暴露给可能用默认凭据爆破进来的访客。POST 仍然走同一个 endpoint 处理改密。
+    if session.get('must_change_password'):
+        return render_template('force_password_change.html')
+
     # 获取客户端数量
     client_count = Client.query.count()
     
@@ -1326,14 +1337,57 @@ app.register_blueprint(gpu_report_bp)
 # 初始化 GPU 报告配置(自动 merge runtime_settings.json 的管理员覆盖)
 app.config['GPU_REPORT'] = load_gpu_report_config()
 
-if __name__ == '__main__':
-    with app.app_context():
-        init_db()  # 初始化数据库和创建管理员
 
-    # APScheduler 只在真正的主进程中启动(避免 debug reloader 双起)
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not config.get('debug', False):
+def _bootstrap():
+    """Idempotent 启动初始化:db + scheduler。
+
+    设计目标:`python server.py` 和 `gunicorn server:app` 都能跑通。
+    早期版本把这两步只放在 `if __name__ == '__main__'` 里,改成 gunicorn 部署
+    会导致表不存在 + 周报/清理 job 永不运行,**且无明显报错**。
+
+    幂等性:
+    - init_db 内部用 db.create_all() 和 idempotent ALTER,重复调用无害
+    - init_scheduler 模块级有 _scheduler is not None 短路
+
+    Dev reloader 防双起:
+    - werkzeug debug reloader 会在父进程 watch、子进程跑 app
+    - 父进程没有 WERKZEUG_RUN_MAIN env var,我们跳过它的 scheduler init
+    - 子进程有 WERKZEUG_RUN_MAIN=true,正常 init
+
+    测试环境跳过:conftest.py 自己控制 init_db 时机,避免双 init。
+    """
+    if _is_testing:
+        return
+
+    is_dev_reloader_child = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    is_dev_reloader_parent = config.get('debug', False) and not is_dev_reloader_child
+
+    with app.app_context():
+        init_db()
+
+    if not is_dev_reloader_parent:
         from gpu_report import init_scheduler
         init_scheduler(app)
 
+    # 多 worker 警告:dashboard 的 client_realtime_data 是进程内 dict,
+    # gunicorn -w 2+ 会让每个 worker 看到不同数据。检测常见多 worker 标志。
+    worker_count_envs = ('WEB_CONCURRENCY', 'GUNICORN_WORKERS')
+    for env in worker_count_envs:
+        try:
+            if int(os.environ.get(env, '1')) > 1:
+                logger.error(
+                    f"⚠ 检测到 {env}={os.environ[env]} (多 worker 部署)。"
+                    " dashboard 的实时数据是进程内 dict,多 worker 下 dashboard "
+                    "数据会在 worker 间分裂。请使用 -w 1 或迁移到 Redis 后再开多 worker。"
+                )
+        except (TypeError, ValueError):
+            pass
+
+
+# 模块加载时执行 — gunicorn server:app 会触发,python server.py 也会触发
+_bootstrap()
+
+
+if __name__ == '__main__':
     # 使用配置文件中的主机和端口
     app.run(host=config['host'], port=config['port'], debug=config['debug'])

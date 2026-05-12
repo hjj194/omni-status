@@ -95,6 +95,38 @@ def test_cleanup_llm_reports_keeps_latest_12(app):
     assert count == 12
 
 
+def test_uptime_cleanup_failure_rolls_back_session(app, caplog):
+    """回归: 早期版本 UptimeRecord 清理失败时不 rollback,session 残留事务。
+    现在应该 rollback + log error + exc_info,session 状态干净可以继续用。"""
+    import logging
+    from unittest.mock import patch
+    from gpu_report import cleanup_hourly
+    from server import db
+
+    cid = _make_client(app, 'rollback-cli')
+    _insert_rows(app, cid, [1])   # 一行 GPU 数据,这部分应该成功
+
+    with app.app_context():
+        app.config['GPU_REPORT']['retention_days'] = 7
+        # 让 UptimeRecord 清理炸,看 GPU 清理是否还能正常 commit,session 状态是否干净
+        with patch('server.UptimeRecord.query') as mock_q:
+            mock_q.filter.side_effect = RuntimeError("simulated UptimeRecord failure")
+            with caplog.at_level(logging.ERROR, logger='system_monitor_server'):
+                cleanup_hourly()   # 不应抛异常
+
+        # session 应该是干净的,可以正常用
+        from gpu_report import GpuHourlyUsage
+        gpu_rows = GpuHourlyUsage.query.filter_by(client_id=cid).count()
+        # 行还在(在 retention 内),且 session 没有未提交事务残留
+        assert gpu_rows == 1
+
+        # 必须有 error 级别日志,不能是 warning
+        error_logs = [r for r in caplog.records
+                      if r.levelno >= logging.ERROR
+                      and 'UptimeRecord' in r.message]
+        assert error_logs, "UptimeRecord 清理失败应该 log ERROR 级别"
+
+
 def test_client_delete_cascades_gpu_hourly_usage(app):
     from gpu_report import GpuHourlyUsage
     from server import db, Client

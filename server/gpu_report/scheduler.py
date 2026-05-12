@@ -26,17 +26,23 @@ def cleanup_hourly():
     db.session.commit()
     logger.info(f"GPU 小时数据清理: 删除 {deleted} 行(整机) + {u_deleted} 行(按用户),早于 {cutoff.date()}")
 
-    # 同时按配置清理 UptimeRecord 防止无限累积
+    # 同时按配置清理 UptimeRecord 防止无限累积。
+    # 独立 try 块,失败时显式 rollback,避免把残留事务带到 session 里影响下个 job。
+    # 用 logger.error + exc_info 而非 warning,这是真问题(表无限增长)不是噪音。
     try:
         from server import UptimeRecord
         uptime_cutoff = (datetime.now() -
                          timedelta(days=cfg.get('uptime_record_retention_days', 90))).date()
-        u_deleted = UptimeRecord.query.filter(UptimeRecord.date < uptime_cutoff).delete()
-        if u_deleted > 0:
+        ur_deleted = UptimeRecord.query.filter(UptimeRecord.date < uptime_cutoff).delete()
+        if ur_deleted > 0:
             db.session.commit()
-            logger.info(f"UptimeRecord 清理: 删除 {u_deleted} 行(早于 {uptime_cutoff})")
+            logger.info(f"UptimeRecord 清理: 删除 {ur_deleted} 行(早于 {uptime_cutoff})")
     except Exception as e:
-        logger.warning(f"UptimeRecord 清理失败: {e}")
+        try:
+            db.session.rollback()
+        except Exception as rb_err:
+            logger.error(f"UptimeRecord 清理 rollback 失败: {rb_err}")
+        logger.error(f"UptimeRecord 清理失败: {e}", exc_info=True)
 
 
 def cleanup_llm_reports():

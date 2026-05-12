@@ -235,11 +235,26 @@ def test_password_change_clears_must_change_flag(app, client):
         'new_password': 'admin',
         'confirm_password': 'admin',
     }, follow_redirects=True)
-    # 还原 must_change_password 以保证 fixture 状态干净
-    with app.app_context():
-        admin = User.query.filter_by(username='admin').first()
-        admin.must_change_password = True
-        db.session.commit()
+
+
+def test_force_change_settings_page_hides_full_layout(app, client):
+    """must_change_password=True 时 /settings GET 只渲染最小改密页,
+    不暴露 LLM 配置 / 存储统计 / 清理按钮等信息。"""
+    client.post('/login', data={'username': 'admin', 'password': 'admin'})
+    resp = client.get('/settings')
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    # 最小页面有改密表单
+    assert '修改管理员密码' in body
+    assert 'current_password' in body
+    # 但不包含完整设置页特有内容
+    assert 'storage' not in body.lower() or '存储统计' not in body
+    # 完整页 LLM 配置块和保留策略块都不应出现
+    assert 'llm_api_key' not in body
+    assert 'save_retention' not in body
+    assert 'cleanup_gpu_hourly' not in body
+    assert 'export/db' not in body
+    # 不需要手动还原:conftest.clean_db fixture 每个测试结束都会重置 admin。
 
 
 def test_dashboard_shows_upgrade_badge_for_outdated_client(app, client):
