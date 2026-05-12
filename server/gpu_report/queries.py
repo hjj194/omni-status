@@ -294,46 +294,88 @@ def get_heatmap_data(days=7):
 
 
 def get_longterm_idle():
-    """7 天 VRAM 长期低于阈值的 GPU(数据系统性未使用)。"""
-    from .llm_agent import _weighted_avg
+    """7 天 VRAM 长期低于阈值的 GPU(数据系统性未使用)。
 
+    SQL 端聚合: 168 小时 × 数十 GPU 的全表扫减到一行一组。
+    早期版本 .all() 拉所有行做 Python 聚合,在十几台机器规模下页面渲染
+    可见地变慢(还跟同页其它查询竞争 SQLite 读锁)。
+    """
     cfg = _get_cfg()
     vram_threshold  = cfg['longterm_vram_threshold']
     hours_required  = cfg['longterm_hours_required']
     period_start    = datetime.now().replace(minute=0, second=0, microsecond=0) - timedelta(days=7)
 
-    all_rows = (GpuHourlyUsage.query
-                .filter(GpuHourlyUsage.hour >= period_start)
-                .all())
-    grouped: dict = {}
-    for r in all_rows:
-        grouped.setdefault((r.client_id, r.gpu_index), []).append(r)
+    G = GpuHourlyUsage
+    is_ok_row = G.ok_sample_count > 0
+    rows = (db.session.query(
+                G.client_id.label('client_id'),
+                G.gpu_index.label('gpu_index'),
+                func.count().label('total_hours'),
+                func.coalesce(func.sum(G.ok_sample_count), 0).label('total_ok'),
+                func.coalesce(
+                    func.sum(G.vram_pct_avg * G.ok_sample_count), 0
+                ).label('vram_w'),
+                func.coalesce(
+                    func.sum(G.util_pct_avg * G.ok_sample_count), 0
+                ).label('util_w'),
+                func.coalesce(func.sum(case(
+                    (is_ok_row & (G.vram_pct_avg < vram_threshold), 1),
+                    else_=0)), 0).label('low_hours'),
+            )
+            .filter(G.hour >= period_start)
+            .group_by(G.client_id, G.gpu_index)
+            .all())
+
+    # 在 Python 端做的事就只剩"过滤+格式化",数据量是分组数(几十),不是行数(几千)
+    candidates = []
+    for r in rows:
+        if r.total_ok <= 0:
+            continue
+        vram_avg = float(r.vram_w) / r.total_ok
+        if vram_avg >= vram_threshold or r.low_hours < hours_required:
+            continue
+        candidates.append({
+            'client_id': r.client_id,
+            'gpu_index': r.gpu_index,
+            'vram_avg_7d': round(vram_avg, 1),
+            'util_avg_7d': round(float(r.util_w) / r.total_ok, 1),
+            'low_hours': int(r.low_hours),
+            'total_hours': int(r.total_hours),
+        })
+
+    if not candidates:
+        return []
+
+    # 只查通过过滤的候选所需的 client + gpu_name (最后一行,代表当前型号)
+    needed_cids = {c['client_id'] for c in candidates}
+    client_lookup = {c.id: c for c in
+                     Client.query.filter(Client.id.in_(needed_cids)).all()}
+
+    # 取每个 (cid, gidx) 最近一行的 gpu_name 用于显示
+    name_rows = (db.session.query(G.client_id, G.gpu_index, G.gpu_name)
+                 .filter(G.hour >= period_start)
+                 .filter(db.tuple_(G.client_id, G.gpu_index).in_(
+                     [(c['client_id'], c['gpu_index']) for c in candidates]))
+                 .order_by(G.hour.desc())
+                 .all())
+    name_lookup: dict = {}
+    for cid, gidx, gname in name_rows:
+        name_lookup.setdefault((cid, gidx), gname)   # 第一次见即最新
 
     result = []
-    for (cid, gidx), row_list in grouped.items():
-        total_ok = sum(r.ok_sample_count or 0 for r in row_list)
-        if total_ok == 0:
-            continue
-        vram_avg = _weighted_avg(row_list, 'vram_pct_avg')
-        util_avg = _weighted_avg(row_list, 'util_pct_avg')
-        low_hours = sum(1 for r in row_list
-                        if (r.ok_sample_count or 0) > 0 and r.vram_pct_avg < vram_threshold)
-
-        if vram_avg >= vram_threshold or low_hours < hours_required:
-            continue
-
-        client = db.session.get(Client, cid)
+    for c in candidates:
+        client = client_lookup.get(c['client_id'])
         if not client:
             continue
         result.append({
             'hostname': client.hostname,
             'display_name': client.display_name or client.hostname,
-            'gpu_index': gidx,
-            'gpu_name': row_list[-1].gpu_name,
-            'vram_avg_7d': round(vram_avg, 1),
-            'util_avg_7d': round(util_avg, 1),
-            'low_hours': low_hours,
-            'total_hours': len(row_list),
+            'gpu_index': c['gpu_index'],
+            'gpu_name': name_lookup.get((c['client_id'], c['gpu_index']), ''),
+            'vram_avg_7d': c['vram_avg_7d'],
+            'util_avg_7d': c['util_avg_7d'],
+            'low_hours': c['low_hours'],
+            'total_hours': c['total_hours'],
         })
     result.sort(key=lambda x: -x['low_hours'])
     return result
@@ -478,8 +520,11 @@ def get_user_detail(user_name: str, period: str = 'week'):
             .order_by(func.count().desc())
             .all())
 
-    # client_id 拿 display_name 用一次性查询,避免对每个 row 都打一次
-    client_lookup = {c.id: c for c in Client.query.all()}
+    # 只查这次出现的 client,避免 Client.query.all() 在客户端数量大时浪费
+    needed_cids = {r.client_id for r in rows}
+    client_lookup = ({c.id: c for c in
+                      Client.query.filter(Client.id.in_(needed_cids)).all()}
+                     if needed_cids else {})
     machine_list = []
     total_hours = 0
     total_idle = 0

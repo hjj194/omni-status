@@ -300,35 +300,40 @@ def _record_uptime(client_id, data):
     elif new_status > record.status:
         record.status = new_status
 
+def _idempotent_add_column(table: str, column_def: str):
+    """对老库执行 ALTER TABLE ADD COLUMN,只忽略"列已存在"这一种错误。
+
+    其它错误(磁盘满 / 表锁 / 库损坏)用 logger.error 暴露,
+    避免 schema 升级失败被静默吞掉导致后续每次写入 NULL 列。
+    """
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(db.text(f'ALTER TABLE {table} ADD COLUMN {column_def}'))
+            conn.commit()
+    except Exception as e:
+        msg = str(e).lower()
+        # SQLite: "duplicate column name: X"
+        # Postgres: "column X of relation Y already exists"
+        # MySQL: "Duplicate column name 'X'"
+        is_duplicate = ('duplicate column' in msg
+                        or 'already exists' in msg)
+        if not is_duplicate:
+            logger.error(
+                f"ALTER TABLE {table} ADD COLUMN {column_def} 失败(非"
+                f"重复列错误,需要排查 schema/磁盘/权限): {e}",
+                exc_info=True)
+
+
 # 创建数据库和初始管理员
 def init_db():
     import gpu_report  # noqa: F401 — 触发 GpuHourlyUsage / LlmReport 模型注册
     db.create_all()
-    
-    # 添加display_order列（如果是旧数据库更新）
-    try:
-        with db.engine.connect() as conn:
-            conn.execute(db.text('ALTER TABLE client ADD COLUMN display_order INTEGER DEFAULT 0'))
-            conn.commit()
-    except Exception:
-        pass  # 如果列已存在则忽略错误
 
-    # 添加client_version列(用于识别待升级机器)
-    try:
-        with db.engine.connect() as conn:
-            conn.execute(db.text('ALTER TABLE client ADD COLUMN client_version VARCHAR(40)'))
-            conn.commit()
-    except Exception:
-        pass
-    
-    # idempotent ALTER 给老库加 must_change_password 列
-    try:
-        with db.engine.connect() as conn:
-            conn.execute(db.text(
-                'ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0'))
-            conn.commit()
-    except Exception:
-        pass
+    # idempotent ALTER 给老库加新列。每条都独立 try,失败 log error 不中断启动
+    # (希望尽量起来,即使部分列添加失败,db.create_all 已建好的新表仍可用)。
+    _idempotent_add_column('client', 'display_order INTEGER DEFAULT 0')
+    _idempotent_add_column('client', 'client_version VARCHAR(40)')
+    _idempotent_add_column('user',   'must_change_password BOOLEAN DEFAULT 0')
 
     # 创建默认管理员账户(标记为必须改密)
     if not User.query.filter_by(username='admin').first():
