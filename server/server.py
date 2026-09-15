@@ -185,7 +185,7 @@ else:
 db = SQLAlchemy(app)
 
 # 服务端期望的最低客户端版本(用于 dashboard 标识"待升级"机器)
-EXPECTED_CLIENT_VERSION = '0426-1'
+EXPECTED_CLIENT_VERSION = '0426-2'
 
 # ─── 速率限制 ──────────────────────────────────────────────────────────
 from flask_limiter import Limiter  # noqa: E402

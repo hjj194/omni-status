@@ -13,9 +13,11 @@ import subprocess
 import configparser
 import sys
 import concurrent.futures
+import ipaddress
+from urllib.parse import urlparse
 
 # 客户端版本号(每次发布升级一次,服务端用它标识哪些机器待升级)
-CLIENT_VERSION = '0426-1'
+CLIENT_VERSION = '0426-2'
 
 # 检查配置文件路径
 CONFIG_FILE = '/etc/system-monitor/client.conf'
@@ -153,7 +155,63 @@ def get_nvidia_gpu_info():
             gpus.append(_parse_gpu_line(i, line))
     return gpus
 
-def get_system_info(client_id):
+_ZERO_NET = ipaddress.IPv4Network('0.0.0.0/8')
+
+
+def _is_usable_ipv4(ip):
+    """是否可作为对外展示的本机 IPv4:排除 127.x 回环和 0.x 这类非法地址。"""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except (ipaddress.AddressValueError, ValueError):
+        return False
+    return not (addr.is_loopback or addr in _ZERO_NET)
+
+
+def _source_ip_towards(host, port=80):
+    """UDP connect 不发包,只让内核按路由表选出去往 host 的源地址。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((host, port))
+        return s.getsockname()[0]
+
+
+def get_ip_address(server_url=None):
+    """获取本机对外 IP。
+
+    优先取内核去往服务端(其次 8.8.8.8)时使用的源地址,它一定是网卡上真实存在的地址。
+    主机名解析只作兜底,且结果必须通过 _is_usable_ipv4 校验。
+    背景:主机名是纯数字时(如 5090_3 被 systemd 去掉下划线后变成 50903),
+    gethostbyname 会把它当成 IP 字面量,解析出 0.0.198.215 这种假地址。
+    """
+    targets = []
+    if server_url:
+        try:
+            host = urlparse(server_url).hostname
+        except ValueError:
+            host = None
+        if host:
+            targets.append(host)
+    targets.append('8.8.8.8')
+
+    for target in targets:
+        try:
+            ip = _source_ip_towards(target)
+        except OSError:  # 含 socket.gaierror:无路由 / 域名解析失败
+            continue
+        if _is_usable_ipv4(ip):
+            return ip
+
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if _is_usable_ipv4(ip):
+            return ip
+    except OSError:
+        pass
+
+    logger.warning("无法获取主机IP地址，使用默认地址")
+    return "127.0.0.1"
+
+
+def get_system_info(client_id, server_url=None):
     """收集系统信息"""
     # CPU信息（非阻塞，基于距上次调用的时间窗口计算）
     cpu_usage = psutil.cpu_percent(interval=None)
@@ -220,16 +278,7 @@ def get_system_info(client_id):
     
     # 获取主机名和IP
     hostname = socket.gethostname()
-    try:
-        ip_address = socket.gethostbyname(socket.gethostname())
-        # 如果返回回环地址，尝试获取实际IP
-        if ip_address.startswith('127.'):
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(('8.8.8.8', 1))
-                ip_address = s.getsockname()[0]
-    except Exception:
-        ip_address = "127.0.0.1"  # 无法获取IP时的默认值
-        logger.warning("无法获取主机IP地址，使用默认地址")
+    ip_address = get_ip_address(server_url)
     
     # 时间戳
     timestamp = datetime.now().isoformat()
@@ -302,7 +351,7 @@ def main():
     # 如果是以测试模式运行
     if len(sys.argv) > 1 and sys.argv[1] == '--test':
         try:
-            system_info = get_system_info(client_id)
+            system_info = get_system_info(client_id, server_url)
             print(json.dumps(system_info, indent=2))
             print("\n尝试连接服务器...")
             success = report_to_server(server_url, system_info, report_token=report_token)
@@ -319,7 +368,7 @@ def main():
     # 主循环
     while True:
         try:
-            system_info = get_system_info(client_id)
+            system_info = get_system_info(client_id, server_url)
             report_to_server(server_url, system_info, report_token=report_token)
         except Exception as e:
             logger.error(f"获取或上报系统信息时出错: {e}")
